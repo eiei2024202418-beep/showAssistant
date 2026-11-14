@@ -26,7 +26,7 @@ import { SAMPLE_JAPANESE_ASS, SAMPLE_ENGLISH_SRT } from './data/sampleSubtitles'
 export default function App() {
   const [file, setFile] = useState<{ name: string; size: number; content: string } | null>(null);
   const [sourceLanguage, setSourceLanguage] = useState<'auto' | 'ja' | 'en'>('auto');
-  const [modelChoice, setModelChoice] = useState<'gemini-4-hydrogen' | 'gemini-3.8-flash' | 'gemini-3.1-flash-lite'>('gemini-4-hydrogen');
+  const [modelChoice, setModelChoice] = useState<'gemini-3.8-flash' | 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite'>('gemini-3.8-flash');
   const [isDragging, setIsDragging] = useState(false);
 
   // Translation State
@@ -294,7 +294,11 @@ export default function App() {
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-indigo-500/10 text-indigo-300 border border-indigo-500/30">
               <Zap className="w-3.5 h-3.5 text-indigo-400" />
-              Gemini 4 Hydrogen • XHigh Thinking ⚡
+              {modelChoice === 'gemini-3.8-flash'
+                ? 'Gemini 3.8 Flash • High Thinking ⚡'
+                : modelChoice === 'gemini-4-hydrogen'
+                ? 'Gemini 4 Hydrogen • High Thinking ⚡'
+                : 'Gemini 3.1 Flash-Lite • Fast ⚡'}
             </span>
             <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
               <ShieldCheck className="w-3.5 h-3.5" />
@@ -414,20 +418,20 @@ export default function App() {
                   id="ai-model-select"
                   aria-label="AI Translation Engine"
                   value={modelChoice}
-                  onChange={(e) => setModelChoice(e.target.value as 'gemini-4-hydrogen' | 'gemini-3.8-flash' | 'gemini-3.1-flash-lite')}
+                  onChange={(e) => setModelChoice(e.target.value as 'gemini-3.8-flash' | 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite')}
                   disabled={status === 'translating'}
                   className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
                 >
-                  <option value="gemini-4-hydrogen">Gemini 4 Hydrogen (XHigh Thinking)</option>
-                  <option value="gemini-3.8-flash">Gemini 3.8 Flash (Balanced • Low)</option>
+                  <option value="gemini-3.8-flash">Gemini 3.8 Flash (High Thinking)</option>
+                  <option value="gemini-4-hydrogen">Gemini 4 Hydrogen (High Thinking)</option>
                   <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite (Ultra Fast)</option>
                 </select>
                 <p className="text-[11px] text-slate-400 px-1">
-                  {modelChoice === 'gemini-4-hydrogen'
-                    ? '🧠 Powered by Gemini 4 Hydrogen with XHigh Thinking for deep anime context accuracy.'
-                    : modelChoice === 'gemini-3.8-flash'
-                    ? '⚡ Powered by Gemini 3.8 Flash with 3x parallel acceleration and auto-fallback.'
-                    : '⚡ Ultra-fast lightweight model for instant translation.'}
+                  {modelChoice === 'gemini-3.8-flash'
+                    ? '🧠 Powered by Gemini 3.8 Flash with High Thinking & Block Most safety settings.'
+                    : modelChoice === 'gemini-4-hydrogen'
+                    ? '🧠 Powered by Gemini 4 Hydrogen with High Thinking & Block Most safety settings.'
+                    : '⚡ Ultra-fast lightweight model (15 RPM Free Tier limit).'}
                 </p>
               </div>
 

@@ -2,7 +2,26 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI, Type, ThinkingLevel, HarmCategory, HarmBlockThreshold } from '@google/genai';
+
+const SAFETY_SETTINGS_BLOCK_MOST = [
+  {
+    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+    threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+    threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+    threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+    threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
+  },
+];
 import {
   parseAss,
   parseSrt,
@@ -124,7 +143,7 @@ function contractBurmeseForCps(text: string, maxChars: number): string {
  */
 async function compressLinesToTargetCps(
   linesToCompress: { index: number; currentBurmese: string; currentGraphemes?: number; durationSec: number; maxChars: number }[],
-  preferredModel = 'gemini-4-hydrogen',
+  preferredModel = 'gemini-3.8-flash',
   strictSecondPass = false,
   rateLimiter?: ModelRateLimiter,
   onStatus?: (msg: string) => void
@@ -134,10 +153,10 @@ async function compressLinesToTargetCps(
 
   const modelChain =
     preferredModel === 'gemini-3.1-flash-lite'
-      ? ['gemini-3.1-flash-lite', 'gemini-4-hydrogen']
-      : preferredModel === 'gemini-3.8-flash'
-      ? ['gemini-3.8-flash', 'gemini-4-hydrogen', 'gemini-3.1-flash-lite']
-      : ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
+      ? ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-4-hydrogen']
+      : preferredModel === 'gemini-4-hydrogen'
+      ? ['gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.1-flash-lite']
+      : ['gemini-3.8-flash', 'gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
 
   const systemInstruction = `You are an expert anime subtitle compression editor for Aegisub.
 The following Burmese anime dialogue lines currently reach or exceed CPS 10 (Characters Per Second) in Aegisub.
@@ -188,6 +207,7 @@ Return a JSON array of objects with "index" (number) and "shortened" (concise Bu
 
       const config: Record<string, unknown> = {
         systemInstruction,
+        safetySettings: SAFETY_SETTINGS_BLOCK_MOST,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
@@ -203,7 +223,7 @@ Return a JSON array of objects with "index" (number) and "shortened" (concise Bu
       };
 
       if (modelToUse === 'gemini-4-hydrogen' || modelToUse === 'gemini-3.8-flash') {
-        config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+        config.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
       }
 
       const timeoutPromise = new Promise<never>((_, reject) =>
@@ -217,6 +237,7 @@ Return a JSON array of objects with "index" (number) and "shortened" (concise Bu
       });
 
       const response = await Promise.race([generatePromise, timeoutPromise]);
+      rateLimiter?.recordSuccess(modelToUse);
       const parsed: { index: number; shortened: string }[] = JSON.parse(response.text || '[]');
 
       const origBurmeseByIndex = new Map(linesToCompress.map((l) => [l.index, l.currentBurmese]));
@@ -275,7 +296,7 @@ function stripStrayNonBurmeseTokensIfBurmesePresent(text: string): string {
 async function repairInvalidLines(
   invalidLines: InvalidLineRepairInput[],
   sourceLang: string,
-  preferredModel = 'gemini-4-hydrogen',
+  preferredModel = 'gemini-3.8-flash',
   rateLimiter?: ModelRateLimiter,
   onStatus?: (msg: string) => void
 ): Promise<Map<number, string>> {
@@ -292,14 +313,21 @@ async function repairInvalidLines(
   const repairPlans: { model: string; thinking?: ThinkingLevel; timeoutMs: number }[] =
     preferredModel === 'gemini-3.1-flash-lite'
       ? [
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 90000 },
           { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 60000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 60000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
+        ]
+      : preferredModel === 'gemini-4-hydrogen'
+      ? [
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.HIGH, timeoutMs: 90000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 90000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 60000 },
           { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
         ]
       : [
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 90000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 60000 },
           { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.HIGH, timeoutMs: 90000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 60000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 60000 },
           { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
         ];
 
@@ -337,6 +365,7 @@ Return a JSON array of objects with "index" (integer) and "translated" (clean Bu
 
       const config: Record<string, unknown> = {
         systemInstruction: EXACT_USER_PROMPT,
+        safetySettings: SAFETY_SETTINGS_BLOCK_MOST,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
@@ -365,6 +394,7 @@ Return a JSON array of objects with "index" (integer) and "translated" (clean Bu
       });
 
       const response = await Promise.race([generatePromise, timeoutPromise]);
+      rateLimiter?.recordSuccess(plan.model);
       const parsed: { index: number; translated: string }[] = JSON.parse(response.text || '[]');
       const byIndex = new Map<number, string>();
       for (const item of parsed) {
@@ -419,7 +449,7 @@ Return a JSON array of objects with "index" (integer) and "translated" (clean Bu
 async function translateBatchWithRetry(
   batch: BatchItemInput[],
   sourceLang: string,
-  preferredModel = 'gemini-4-hydrogen',
+  preferredModel = 'gemini-3.8-flash',
   rateLimiter?: ModelRateLimiter,
   onStatus?: (msg: string) => void
 ): Promise<{ index: number; translated: string }[]> {
@@ -454,31 +484,39 @@ ${JSON.stringify(batch)}
 
 Return a JSON array of objects with "index" (number matching input) and "translated" (translated dialogue text):`;
 
-  // Attempt strategy: route smoothly to healthy alternate models on 503/429 and honor API retryDelay
+  // Attempt strategy: prioritize user's chosen model (gemini-3.8-flash with HIGH thinking by default)
+  // and only rotate to alternate models if the primary model hits quota/overload errors.
   const attemptPlans: { model: string; thinking?: ThinkingLevel; timeoutMs: number }[] =
     preferredModel === 'gemini-3.1-flash-lite'
       ? [
           { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 75000 },
-          { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
           { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 75000 },
           { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
         ]
-      : preferredModel === 'gemini-3.8-flash'
+      : preferredModel === 'gemini-4-hydrogen'
       ? [
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.LOW, timeoutMs: 45000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
           { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
           { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 75000 },
           { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
           { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 75000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.LOW, timeoutMs: 75000 },
         ]
       : [
-          { model: 'gemini-4-hydrogen', thinking: 'xhigh' as ThinkingLevel, timeoutMs: 150000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
           { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
           { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 75000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
           { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.LOW, timeoutMs: 75000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 75000 },
         ];
 
   let lastError: unknown;
@@ -488,11 +526,22 @@ Return a JSON array of objects with "index" (number matching input) and "transla
     const plan = attemptPlans[attempt - 1];
     const modelToUse = plan.model;
 
-    // Skip immediately if this model already hit a hard daily quota limit and another model exists later
-    if (rateLimiter?.isDailyExhausted(modelToUse)) {
-      const hasOtherModelLater = attemptPlans.slice(attempt).some((p) => !rateLimiter.isDailyExhausted(p.model));
-      if (hasOtherModelLater) {
-        console.log(`[translate] Skipping attempt ${attempt}/${totalAttempts} (${modelToUse} daily quota exhausted)`);
+    // Skip immediately if this model hit daily quota OR has a long >15s cooldown while a healthy alternate model exists
+    const modelCooldownMs = rateLimiter?.getRemainingCooldownMs(modelToUse) ?? 0;
+    const hasHealthyOtherModelLater = attemptPlans
+      .slice(attempt)
+      .some(
+        (p) =>
+          p.model !== modelToUse &&
+          !rateLimiter?.isDailyExhausted(p.model) &&
+          (rateLimiter?.getRemainingCooldownMs(p.model) ?? 0) === 0
+      );
+
+    if (rateLimiter?.isDailyExhausted(modelToUse) || (modelCooldownMs > 15000 && hasHealthyOtherModelLater)) {
+      if (hasHealthyOtherModelLater) {
+        console.log(
+          `[translate] Skipping attempt ${attempt}/${totalAttempts} (${modelToUse} cooldown=${Math.ceil(modelCooldownMs / 1000)}s) in favor of healthy alternate model`
+        );
         continue;
       }
     }
@@ -506,6 +555,7 @@ Return a JSON array of objects with "index" (number matching input) and "transla
 
       const config: Record<string, unknown> = {
         systemInstruction,
+        safetySettings: SAFETY_SETTINGS_BLOCK_MOST,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
@@ -538,7 +588,13 @@ Return a JSON array of objects with "index" (number matching input) and "transla
       });
 
       const response = await Promise.race([generatePromise, timeoutPromise]);
+      rateLimiter?.recordSuccess(modelToUse);
       console.log(`[translate] ${modelToUse} responded in ${Date.now() - t0}ms`);
+
+      const finishReason = response.candidates?.[0]?.finishReason;
+      if (finishReason === 'SAFETY') {
+        throw new Error(`Response blocked by "Block most" safety settings (${modelToUse})`);
+      }
 
       const responseText = response.text || '[]';
       const parsed: { index: number; translated: string }[] = JSON.parse(responseText);
@@ -617,16 +673,33 @@ Return a JSON array of objects with "index" (number matching input) and "transla
           !rateLimiter?.isDailyExhausted(nextPlan.model) &&
           (rateLimiter?.getRemainingCooldownMs(nextPlan.model) ?? 0) === 0;
 
+        const hasHealthyFallbackLater = attemptPlans
+          .slice(attempt)
+          .some(
+            (p) =>
+              p.model !== modelToUse &&
+              !rateLimiter?.isDailyExhausted(p.model) &&
+              (rateLimiter?.getRemainingCooldownMs(p.model) ?? 0) === 0
+          );
+
         if (switchingHealthyModel) {
           await new Promise((resolve) => setTimeout(resolve, 1000));
         } else {
           const backoffMs = classified?.isRateLimit
             ? Math.max(classified.retryDelayMs, 10000)
+            : classified?.isTransientUnavailable
+            ? Math.min(20000, 4000 * attempt)
             : 1500 * attempt;
-          if (backoffMs >= 4000) {
-            onStatus?.(`API busy/rate-limited — waiting ${Math.ceil(backoffMs / 1000)}s before retrying...`);
+          if (backoffMs > 15000 && hasHealthyFallbackLater) {
+            // Skip long stall on throttled model so next loop immediately switches to healthy alternate
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          } else {
+            if (backoffMs >= 4000) {
+              const label = classified?.isTransientUnavailable ? 'High demand (503)' : 'API busy/rate-limited';
+              onStatus?.(`${label} — waiting ${Math.ceil(backoffMs / 1000)}s before retrying automatically...`);
+            }
+            await new Promise((resolve) => setTimeout(resolve, backoffMs));
           }
-          await new Promise((resolve) => setTimeout(resolve, backoffMs));
         }
       }
     }
@@ -643,7 +716,7 @@ app.post('/api/translate/stream', async (req, res) => {
     fileContent,
     fileName = 'subtitle.ass',
     sourceLanguage = 'auto',
-    modelChoice = 'gemini-4-hydrogen',
+    modelChoice = 'gemini-3.8-flash',
   } = req.body;
 
   if (!fileContent || typeof fileContent !== 'string') {

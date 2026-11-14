@@ -49,4 +49,23 @@ test('ModelRateLimiter enforces cooldown and daily exhaustion tracking', async (
 
   limiter.recordError('daily-model', '429 RequestsPerDay exceeded');
   assert.equal(limiter.isDailyExhausted('daily-model'), true);
+
+  // Escalating 503 high-demand cooldowns (6s -> 12s -> 20s) and reset on recordSuccess
+  limiter.recordError('spike-model', '503 UNAVAILABLE high demand');
+  const firstWait = limiter.getRemainingCooldownMs('spike-model');
+  assert.ok(firstWait > 4000 && firstWait <= 6000);
+
+  limiter.recordError('spike-model', '503 UNAVAILABLE high demand');
+  const secondWait = limiter.getRemainingCooldownMs('spike-model');
+  assert.ok(secondWait > 10000 && secondWait <= 12000);
+
+  limiter.recordSuccess('spike-model');
+  limiter.recordError('spike-model', '503 UNAVAILABLE high demand');
+  // Since cooldownUntil is still max'd until time passes, verify fresh model after success resets streak
+  const limiter2 = new ModelRateLimiter({ 'fresh-model': 50 });
+  limiter2.recordError('fresh-model', '503 UNAVAILABLE');
+  limiter2.recordSuccess('fresh-model');
+  limiter2.recordError('fresh-model', '503 UNAVAILABLE');
+  const resetWait = limiter2.getRemainingCooldownMs('fresh-model');
+  assert.ok(resetWait > 4000 && resetWait <= 6000);
 });

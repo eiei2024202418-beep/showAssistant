@@ -69,6 +69,8 @@ const DEFAULT_MIN_INTERVAL_MS: Record<string, number> = {
  */
 export class ModelRateLimiter {
   private cooldownUntil = new Map<string, number>();
+  private cooldownKind = new Map<string, 'rate-limit' | 'high-demand'>();
+  private consecutiveUnavailable = new Map<string, number>();
   private dailyExhausted = new Set<string>();
   private lastScheduledAt = new Map<string, number>();
   private modelMutex = new Map<string, Promise<void>>();
@@ -87,18 +89,28 @@ export class ModelRateLimiter {
     return Math.max(0, until - Date.now());
   }
 
+  recordSuccess(model: string): void {
+    this.consecutiveUnavailable.set(model, 0);
+  }
+
   recordError(model: string, errMsg: string): ApiErrorClassification {
     const classified = classifyApiError(errMsg);
     const now = Date.now();
 
     if (classified.isDailyQuotaExhausted) {
       this.dailyExhausted.add(model);
+      this.cooldownKind.set(model, 'rate-limit');
       this.cooldownUntil.set(model, Math.max(this.cooldownUntil.get(model) ?? 0, now + 600_000));
     } else if (classified.isRateLimit) {
       const waitMs = classified.retryDelayMs > 0 ? classified.retryDelayMs : 15_000;
+      this.cooldownKind.set(model, 'rate-limit');
       this.cooldownUntil.set(model, Math.max(this.cooldownUntil.get(model) ?? 0, now + waitMs));
     } else if (classified.isTransientUnavailable) {
-      this.cooldownUntil.set(model, Math.max(this.cooldownUntil.get(model) ?? 0, now + 6000));
+      const streak = (this.consecutiveUnavailable.get(model) ?? 0) + 1;
+      this.consecutiveUnavailable.set(model, streak);
+      const waitMs = streak === 1 ? 6000 : streak === 2 ? 12000 : 20000;
+      this.cooldownKind.set(model, 'high-demand');
+      this.cooldownUntil.set(model, Math.max(this.cooldownUntil.get(model) ?? 0, now + waitMs));
     }
 
     return classified;
@@ -129,7 +141,8 @@ export class ModelRateLimiter {
 
       if (waitMs > 0) {
         if (cooldownTarget > now && cooldownTarget >= intervalTarget) {
-          onWait?.(waitMs, `Rate-limit cooldown on ${model}`);
+          const kind = this.cooldownKind.get(model) === 'high-demand' ? 'High-demand cooldown' : 'Rate-limit cooldown';
+          onWait?.(waitMs, `${kind} on ${model}`);
         } else if (waitMs >= 2000) {
           onWait?.(waitMs, `Pacing requests on ${model}`);
         }
