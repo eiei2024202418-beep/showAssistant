@@ -1,0 +1,6 @@
+{
+  "name": "Anime Subtitle Translator",
+  "description": "Translate anime ASS and SRT subtitles into natural Burmese while preserving all styles, tags, line breaks, and timing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,1103 @@
+/**
+ * Subtitle parser and serializer for ASS and SRT formats.
+ */
+
+import { reconcileTags } from './tagProtector';
+
+export interface AssEvent {
+  index: number;
+  type: 'Dialogue' | 'Comment';
+  layer: string;
+  start: string;
+  end: string;
+  style: string;
+  name: string;
+  marginL: string;
+  marginR: string;
+  marginV: string;
+  effect: string;
+  text: string;
+  originalText: string;
+  isTranslatable: boolean;
+}
+
+export interface ParsedAssData {
+  format: 'ass' | 'srt';
+  headerSection: string[]; // Lines before [Events] Format:
+  eventFormatFields: string[]; // ['Layer', 'Start', 'End', 'Style', 'Name', ...]
+  events: AssEvent[];
+  trailerSection: string[]; // Any trailing lines after events
+}
+
+/**
+ * Checks whether an ASS text string is pure drawing command without spoken dialogue.
+ * Drawing commands in ASS are wrapped between {\p1} and {\p0} with coordinate commands (m, l, b, s, p, c).
+ */
+export function isPureDrawing(text: string): boolean {
+  if (!text.includes('{\\p')) return false;
+  // If the text has only drawing tags and drawing coordinates
+  const stripped = text.replace(/\{[^}]*\}/g, '').trim();
+  // Drawing coordinates are typically numbers and vector command letters: m, l, b, s, p, c
+  return /^[0-9\smlbspc-]+$/i.test(stripped);
+}
+
+/**
+ * Converts SRT timestamp "00:01:23,456" into ASS timestamp "0:01:23.46"
+ */
+export function srtTimeToAssTime(srtTime: string): string {
+  const parts = srtTime.trim().split(/[:,]/);
+  if (parts.length < 4) return '0:00:00.00';
+  const hours = parseInt(parts[0], 10);
+  const minutes = parts[1].padStart(2, '0');
+  const seconds = parts[2].padStart(2, '0');
+  const ms = parseInt(parts[3], 10);
+  const centiseconds = Math.round(ms / 10).toString().padStart(2, '0').slice(0, 2);
+  return `${hours}:${minutes}:${seconds}.${centiseconds}`;
+}
+
+/**
+ * Parses an ASS file string.
+ */
+export function parseAss(content: string): ParsedAssData {
+  const rawLines = content.split(/\r?\n/);
+  const headerSection: string[] = [];
+  const trailerSection: string[] = [];
+  const events: AssEvent[] = [];
+  let eventFormatFields: string[] = ['Layer', 'Start', 'End', 'Style', 'Name', 'MarginL', 'MarginR', 'MarginV', 'Effect', 'Text'];
+
+  let inEvents = false;
+  let hasFormatLine = false;
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    const trimmed = line.trim();
+
+    if (trimmed.toLowerCase() === '[events]') {
+      inEvents = true;
+      headerSection.push(line);
+      continue;
+    }
+
+    if (!inEvents) {
+      headerSection.push(line);
+      continue;
+    }
+
+    // Inside [Events]
+    if (trimmed.startsWith('Format:')) {
+      hasFormatLine = true;
+      headerSection.push(line);
+      const fieldsStr = line.slice(7).trim();
+      eventFormatFields = fieldsStr.split(',').map((f) => f.trim());
+      continue;
+    }
+
+    // Check if new section begins (e.g. [Fonts])
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      inEvents = false;
+      trailerSection.push(line);
+      continue;
+    }
+
+    if (trimmed.startsWith('Dialogue:') || trimmed.startsWith('Comment:')) {
+      const colonIndex = line.indexOf(':');
+      const eventType = trimmed.startsWith('Dialogue:') ? 'Dialogue' : 'Comment';
+      const eventBody = line.slice(colonIndex + 1).trim();
+
+      // Split up to eventFormatFields.length - 1 commas
+      const numFields = eventFormatFields.length;
+      const parts: string[] = [];
+      let current = '';
+      let fieldCount = 0;
+
+      for (let c = 0; c < eventBody.length; c++) {
+        const char = eventBody[c];
+        if (char === ',' && fieldCount < numFields - 1) {
+          parts.push(current.trim());
+          current = '';
+          fieldCount++;
+        } else {
+          current += char;
+        }
+      }
+      parts.push(current); // The remainder is the Text field
+
+      // Map field by name
+      const getField = (name: string, fallback = '') => {
+        const idx = eventFormatFields.findIndex((f) => f.toLowerCase() === name.toLowerCase());
+        return idx !== -1 && idx < parts.length ? parts[idx] : fallback;
+      };
+
+      const text = parts[parts.length - 1] || '';
+      const textWithoutTags = text.replace(/\{[^}]*\}/g, '').replace(/\\[Nnh]/g, '').trim();
+      const isDrawing = isPureDrawing(text);
+      const isTranslatable = eventType === 'Dialogue' && !isDrawing && textWithoutTags.length > 0;
+
+      events.push({
+        index: events.length,
+        type: eventType,
+        layer: getField('Layer', '0'),
+        start: getField('Start', '0:00:00.00'),
+        end: getField('End', '0:00:05.00'),
+        style: getField('Style', 'Default'),
+        name: getField('Name', ''),
+        marginL: getField('MarginL', '0'),
+        marginR: getField('MarginR', '0'),
+        marginV: getField('MarginV', '0'),
+        effect: getField('Effect', ''),
+        text: text,
+        originalText: text,
+        isTranslatable,
+      });
+    } else {
+      // Empty line or extra comment inside events
+      if (inEvents && events.length > 0) {
+        // Keep in trailer if at the end, or if empty
+        if (line.trim().length === 0) {
+          // ignore or keep
+        }
+      }
+    }
+  }
+
+  // If missing format line, ensure header has one
+  if (!hasFormatLine) {
+    headerSection.push(`Format: ${eventFormatFields.join(', ')}`);
+  }
+
+  return {
+    format: 'ass',
+    headerSection,
+    eventFormatFields,
+    events,
+    trailerSection,
+  };
+}
+
+/**
+ * Parses an SRT file string and converts it into standard ParsedAssData.
+ */
+export function parseSrt(content: string): ParsedAssData {
+  // Strip BOM if present
+  const cleanContent = content.replace(/^\uFEFF/, '');
+  const normalized = cleanContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const blocks = normalized.trim().split(/\n\s*\n/);
+  const events: AssEvent[] = [];
+
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i].trim();
+    if (!block) continue;
+    const lines = block.split('\n');
+    if (lines.length < 2) continue;
+
+    // Line 0 is usually index number (e.g. 1)
+    let timeLineIdx = 1;
+    if (!lines[1].includes('-->') && lines[0].includes('-->')) {
+      timeLineIdx = 0;
+    }
+
+    const timeLine = lines[timeLineIdx];
+    const timeMatch = timeLine.match(/(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})/);
+    if (!timeMatch) continue;
+
+    const startAss = srtTimeToAssTime(timeMatch[1]);
+    const endAss = srtTimeToAssTime(timeMatch[2]);
+
+    const textLines = lines.slice(timeLineIdx + 1);
+    // Replace newlines within the subtitle with ASS \N
+    let text = textLines.join('\\N');
+
+    // Convert HTML tags to ASS tags
+    text = text
+      .replace(/<i>/gi, '{\\i1}')
+      .replace(/<\/i>/gi, '{\\i0}')
+      .replace(/<b>/gi, '{\\b1}')
+      .replace(/<\/b>/gi, '{\\b0}')
+      .replace(/<u>/gi, '{\\u1}')
+      .replace(/<\/u>/gi, '{\\u0}');
+
+    const cleanText = text.replace(/\{[^}]*\}/g, '').replace(/<[^>]*>/g, '').replace(/\\N/g, '').trim();
+
+    events.push({
+      index: events.length,
+      type: 'Dialogue',
+      layer: '0',
+      start: startAss,
+      end: endAss,
+      style: 'Default',
+      name: '',
+      marginL: '0',
+      marginR: '0',
+      marginV: '0',
+      effect: '',
+      text,
+      originalText: text,
+      isTranslatable: cleanText.length > 0,
+    });
+  }
+
+  const defaultHeader = [
+    '[Script Info]',
+    '; Script generated by Anime Subtitle Translator',
+    'Title: Anime Subtitle (Burmese Myanmar Translation)',
+    'Original Script: Converted from SRT',
+    'ScriptType: v4.00+',
+    'WrapStyle: 0',
+    'ScaledBorderAndShadow: yes',
+    'YCbCr Matrix: TV.709',
+    'PlayResX: 1920',
+    'PlayResY: 1080',
+    '',
+    '[V4+ Styles]',
+    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+    'Style: Default,Arial,52,&H00FFFFFF,&H000000FF,&H00151515,&H80000000,0,0,0,0,100,100,0,0,1,2.8,1.2,2,25,25,25,1',
+    'Style: Top,Arial,46,&H00FFFFFF,&H000000FF,&H00151515,&H80000000,0,0,0,0,100,100,0,0,1,2.5,1.2,8,25,25,25,1',
+    '',
+    '[Events]',
+    'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+  ];
+
+  return {
+    format: 'srt',
+    headerSection: defaultHeader,
+    eventFormatFields: ['Layer', 'Start', 'End', 'Style', 'Name', 'MarginL', 'MarginR', 'MarginV', 'Effect', 'Text'],
+    events,
+    trailerSection: [],
+  };
+}
+
+/**
+ * Converts an ASS timestamp string "H:MM:SS.cs" (e.g. "0:21:03.44") into total seconds.
+ */
+export function parseAssTimeToSeconds(timeStr: string): number {
+  if (!timeStr) return 0;
+  const parts = timeStr.trim().split(/[:.]/);
+  if (parts.length < 4) return 0;
+  const h = parseInt(parts[0], 10) || 0;
+  const m = parseInt(parts[1], 10) || 0;
+  const s = parseInt(parts[2], 10) || 0;
+  const cs = parseInt(parts[3], 10) || 0;
+  return h * 3600 + m * 60 + s + cs / 100;
+}
+
+/**
+ * Calculates event duration in seconds.
+ */
+export function getEventDuration(start: string, end: string): number {
+  const startSec = parseAssTimeToSeconds(start);
+  const endSec = parseAssTimeToSeconds(end);
+  const diff = endSec - startSec;
+  return diff > 0.05 ? Math.round(diff * 100) / 100 : 1.0;
+}
+
+const mySegmenter = new Intl.Segmenter('my', { granularity: 'grapheme' });
+
+/**
+ * Counts visible graphemes / syllables (excluding ASS override tags, \N breaks, and whitespace)
+ * matching Aegisub's exact Burmese CPS character metric.
+ */
+export function countVisibleGraphemes(text: string): number {
+  const visible = text.replace(/\{[^}]*\}/g, '').replace(/\\[Nnh]/g, '').replace(/\s+/g, '').trim();
+  if (!visible) return 0;
+  return [...mySegmenter.segment(visible)].length;
+}
+
+/**
+ * Calculates CPS (Characters Per Second) for a subtitle line.
+ * Matches Aegisub's exact visible grapheme count divided by duration in seconds.
+ */
+export function calculateCps(text: string, durationSec: number): number {
+  if (!durationSec || durationSec <= 0) return 0;
+  const count = countVisibleGraphemes(text);
+  if (count === 0) return 0;
+  return Math.round((count / durationSec) * 10) / 10;
+}
+
+/**
+ * Calculates the maximum grapheme count for a line to guarantee CPS < 10.
+ * Uses target CPS of 9.0 (strictly below 10 CPS).
+ */
+export function getMaxCharsForCps(durationSec: number, targetCps = 9.0): number {
+  return Math.max(4, Math.floor(durationSec * targetCps));
+}
+
+/**
+ * Determines whether a subtitle event is an on-screen Sign, Text, Title, or Episode header
+ * which is exempt from CPS (Characters Per Second) limits, per anime subtitling rules:
+ * "Actor မှာ ဇာတ်ကောင်ပြောထားတာ မဟုတ်ပဲ Text တွေ Sign တွေ ခေါင်းစဉ်တွေ အပိုင်း ခေါင်းစဉ်တွေဘာတွေစတဲ့ကောင်တွေပေါ့"
+ *
+ * NOTE: In many anime subtitle files, the Actor field is completely blank ("").
+ * This function detects Signs and Titles with 100% accuracy using:
+ * 1. Actor keywords (if present)
+ * 2. Style names (Signs, Title, Q3/Q4/Q5/Q8/Q9, Lyrics, Phone, Screen, Box, etc.)
+ * 3. ASS Typesetting override tags ({\pos, \move, \frz, \frx, \fry, \clip, \iclip, \p1})
+ * 4. Bracketed notation ([Sign: ...], (Note: ...), 【...】) and Title prefixes (Episode, Chapter, 第...話)
+ */
+export function isSignOrTitle(actor: string, style: string, text: string): boolean {
+  const actorClean = (actor || '').trim().toLowerCase();
+  const styleClean = (style || '').trim().toLowerCase();
+  const rawText = (text || '').trim();
+
+  // 1. Explicit Sign/Text/Title in Actor name (if file includes Actor)
+  const signActorKeywords = [
+    'sign', 'signs', 'text', 'title', 'note', 'box', 'screen',
+    'op', 'ed', 'song', 'lyrics', 'credit', 'insert', 'info',
+    'caption', 'header', 'label', 'card', 'board', 'phone', 'book'
+  ];
+  if (actorClean && signActorKeywords.some((k) => actorClean === k || actorClean.startsWith(k + '_') || actorClean.endsWith('_' + k) || actorClean.includes(k))) {
+    return true;
+  }
+
+  // 2. Explicit Sign/Title/Lyrics in Style name (including prompt mapped styles Q3, Q4, Q5, Q8, Q9)
+  const signStyles = [
+    'sign', 'signs', 'title', 'lyrics', 'credit', 'rpg_text_box',
+    'screen', 'card', 'phone', 'board', 'banner', 'caption', 'insert',
+    'os_', 'onscreen', 'song', 'ed lyrics', 'op lyrics', 'q3', 'q4', 'q5', 'q8', 'q9'
+  ];
+  if (signStyles.some((k) => styleClean === k || styleClean.startsWith(k) || styleClean.includes(k))) {
+    return true;
+  }
+
+  // 3. ASS Typesetting Override Tags (when Actor is blank, subbers position on-screen signs with these tags)
+  // \pos(X,Y) = Absolute screen coordinate positioning
+  // \move(...) = Moving sign banner
+  // \frz, \frx, \fry = 3D angle rotation over on-screen objects/posters
+  // \clip, \iclip = Sign masking
+  // \p1 ... \p0 = Vector drawing box for signs
+  if (
+    rawText.includes('{\\pos(') ||
+    rawText.includes('{\\pos (') ||
+    rawText.includes('{\\move(') ||
+    rawText.includes('{\\frz') ||
+    rawText.includes('{\\frx') ||
+    rawText.includes('{\\fry') ||
+    rawText.includes('{\\clip(') ||
+    rawText.includes('{\\iclip(') ||
+    rawText.includes('{\\p1}') ||
+    rawText.includes('{\\p2}')
+  ) {
+    return true;
+  }
+
+  // 4. Bracketed notation used in Anime Fansubs for signs & translator notes
+  // e.g. [Sign: ...], (Note: ...), 【...】, [Tokyo Station]
+  const cleanDialogue = rawText.replace(/\{[^}]*\}/g, '').trim();
+  if (
+    /^[\[\(【〔<].+[\]\)】〕>]$/.test(cleanDialogue) ||
+    /^(sign|note|tl note|t\/n|title|caption)[:\s]/i.test(cleanDialogue) ||
+    /^(episode|chapter|act|part|vol|scene|stage)\s*[\d#ivx]+/i.test(cleanDialogue) ||
+    /^第.+[話巻章]/i.test(cleanDialogue)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+export interface NearbyDuplicateCluster {
+  clusterId: string;
+  normalizedText: string;
+  memberIndices: number[];
+  longestDurationIndex: number;
+}
+
+/**
+ * Normalizes dialogue text by stripping ASS override tags ({...}) and collapsing outer whitespace
+ * so identical source lines (even with animated/moving tags) can be matched accurately.
+ */
+export function normalizeDuplicateKey(text: string): string {
+  return (text || '')
+    .replace(/\{[^}]*\}/g, '')
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+}
+
+/**
+ * Finds groups of translatable lines that have identical clean source text and appear
+ * nearby — either consecutive/adjacent (diff = 1, e.g. lines 1,2,3) or separated by at most 1 line (diff = 2).
+ * Far-apart identical lines (diff > maxIndexGap) are NOT grouped and continue to enforce normal CPS < 10.
+ */
+export function findNearbyDuplicateClusters(
+  events: AssEvent[],
+  maxIndexGap = 2
+): Map<number, NearbyDuplicateCluster> {
+  const byKey = new Map<string, AssEvent[]>();
+
+  for (const ev of events) {
+    if (!ev.isTranslatable) continue;
+    const key = normalizeDuplicateKey(ev.text);
+    if (!key) continue;
+    const list = byKey.get(key) || [];
+    list.push(ev);
+    byKey.set(key, list);
+  }
+
+  const clusterByEventIndex = new Map<number, NearbyDuplicateCluster>();
+  let clusterCounter = 0;
+
+  for (const [key, list] of byKey.entries()) {
+    if (list.length < 2) continue;
+
+    // Split occurrences into nearby runs where consecutive events are within maxIndexGap
+    let currentRun: AssEvent[] = [list[0]];
+    const runs: AssEvent[][] = [];
+
+    for (let i = 1; i < list.length; i++) {
+      if (list[i].index - list[i - 1].index <= maxIndexGap) {
+        currentRun.push(list[i]);
+      } else {
+        if (currentRun.length >= 2) runs.push(currentRun);
+        currentRun = [list[i]];
+      }
+    }
+    if (currentRun.length >= 2) runs.push(currentRun);
+
+    for (const run of runs) {
+      clusterCounter++;
+      const clusterId = `dup_${clusterCounter}`;
+      let longestDurationIndex = run[0].index;
+      let maxDur = getEventDuration(run[0].start, run[0].end);
+
+      for (let i = 1; i < run.length; i++) {
+        const dur = getEventDuration(run[i].start, run[i].end);
+        if (dur > maxDur) {
+          maxDur = dur;
+          longestDurationIndex = run[i].index;
+        }
+      }
+
+      const cluster: NearbyDuplicateCluster = {
+        clusterId,
+        normalizedText: key,
+        memberIndices: run.map((e) => e.index),
+        longestDurationIndex,
+      };
+
+      for (const ev of run) {
+        clusterByEventIndex.set(ev.index, cluster);
+      }
+    }
+  }
+
+  return clusterByEventIndex;
+}
+
+/**
+ * Unifies translations across all members of each nearby duplicate cluster so identical
+ * nearby source lines always receive the exact same Burmese dialogue text while preserving
+ * each line's own ASS override tags.
+ */
+export function unifyNearbyDuplicateTranslations(
+  events: AssEvent[],
+  translatedMap: Map<number, string>,
+  clusters: Map<number, NearbyDuplicateCluster>
+): void {
+  const visitedClusters = new Set<string>();
+
+  for (const cluster of clusters.values()) {
+    if (visitedClusters.has(cluster.clusterId)) continue;
+    visitedClusters.add(cluster.clusterId);
+
+    // Choose canonical translated line: prefer longest-duration member, else first translated member
+    let canonicalIdx = cluster.longestDurationIndex;
+    if (!translatedMap.has(canonicalIdx)) {
+      const fallback = cluster.memberIndices.find((idx) => translatedMap.has(idx));
+      if (fallback === undefined) continue;
+      canonicalIdx = fallback;
+    }
+
+    const canonicalTranslated = translatedMap.get(canonicalIdx)!;
+    const canonicalOriginal = events[canonicalIdx]?.text ?? '';
+    const cleanCanonicalBody = canonicalTranslated.replace(/\{[^}]*\}/g, '');
+
+    for (const memberIdx of cluster.memberIndices) {
+      if (!translatedMap.has(memberIdx)) continue;
+      const memberOriginal = events[memberIdx]?.text ?? '';
+      if (memberOriginal === canonicalOriginal) {
+        translatedMap.set(memberIdx, canonicalTranslated);
+      } else {
+        translatedMap.set(memberIdx, reconcileTags(memberOriginal, cleanCanonicalBody));
+      }
+    }
+  }
+}
+
+const BURMESE_CHAR_REGEX = /[\u1000-\u109F\uAA60-\uAA7F\uA9E0-\uA9FF]/;
+
+const FORBIDDEN_SCRIPT_DETECTORS: { name: string; regex: RegExp }[] = [
+  { name: 'Japanese (Hiragana)', regex: /[\u3040-\u309F]/ },
+  { name: 'Japanese (Katakana)', regex: /[\u30A0-\u30FF\uFF65-\uFF9F\u30FC]/ },
+  { name: 'CJK / Kanji', regex: /[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF\u3005]/ },
+  { name: 'Japanese Punctuation', regex: /[\u3001\u3002\u300C-\u3011\uFF01\uFF1F]/ },
+  { name: 'Korean (Hangul)', regex: /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/ },
+  { name: 'Thai', regex: /[\u0E00-\u0E7F]/ },
+  { name: 'Lao', regex: /[\u0E80-\u0EFF]/ },
+  { name: 'Khmer', regex: /[\u1780-\u17FF]/ },
+  { name: 'Indic', regex: /[\u0900-\u0DFF]/ },
+  { name: 'Cyrillic', regex: /[\u0400-\u04FF]/ },
+  { name: 'Arabic / Hebrew', regex: /[\u0600-\u06FF\u0590-\u05FF]/ },
+];
+
+/**
+ * Strips ASS override tags ({...}) and line breaks (\N, \n, \h) to inspect visible text.
+ */
+export function stripAssTagsForValidation(text: string): string {
+  return text
+    .replace(/\{[^}]*\}/g, '')
+    .replace(/\\[Nnh]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Detects any forbidden non-Burmese / non-ASCII scripts in visible subtitle text
+ * (e.g. leftover Japanese, Thai `ค`, Lao `ະ`, Korean, Indic, Cyrillic, Arabic).
+ * ASS override tags ({...}) are stripped first so font names/tags never false-trigger.
+ */
+export function detectForbiddenScripts(text: string): { hasForbidden: boolean; scripts: string[] } {
+  const visible = stripAssTagsForValidation(text);
+  const scripts: string[] = [];
+
+  for (const detector of FORBIDDEN_SCRIPT_DETECTORS) {
+    if (detector.regex.test(visible)) {
+      scripts.push(detector.name);
+    }
+  }
+
+  return {
+    hasForbidden: scripts.length > 0,
+    scripts,
+  };
+}
+
+/**
+ * Validates that a translated subtitle line actually contains valid Burmese localization
+ * without leftover source Japanese/English sentences or foreign script token leaks.
+ */
+export function validateTranslatedLine(
+  originalText: string,
+  translatedText: string
+): { valid: boolean; reason?: string; forbiddenScripts?: string[] } {
+  const visibleOrig = stripAssTagsForValidation(originalText);
+  const visibleTrans = stripAssTagsForValidation(translatedText);
+
+  // 1. Empty translation check: valid ONLY for parenthetical notes/SFX or short groans/sighs
+  if (visibleTrans.length === 0) {
+    const isParenthetical = /^[(\[（【].*[)\]）】]$/.test(visibleOrig);
+    const isShortSfxOrGroan = visibleOrig.length <= 12;
+    if (!isParenthetical && !isShortSfxOrGroan) {
+      return { valid: false, reason: 'empty_non_sfx' };
+    }
+    return { valid: true };
+  }
+
+  // 2. Forbidden script check (Japanese, CJK, Thai, Lao, Korean, Indic, Cyrillic, Arabic, Khmer)
+  const forbidden = detectForbiddenScripts(translatedText);
+  if (forbidden.hasForbidden) {
+    return {
+      valid: false,
+      reason: 'forbidden_script',
+      forbiddenScripts: forbidden.scripts,
+    };
+  }
+
+  // 3. Zero-Burmese check (catch untranslated English sentences or JP->EN outputs)
+  const hasBurmese = BURMESE_CHAR_REGEX.test(visibleTrans);
+  if (!hasBurmese) {
+    const hasAsciiLetters = /[A-Za-z]/.test(visibleTrans);
+    if (!hasAsciiLetters) {
+      // Pure numbers / punctuation like "100%", "...", "?!"
+      return { valid: true };
+    }
+
+    const asciiWords = visibleTrans.match(/[A-Za-z0-9'-]+/g) || [];
+    const asciiLetterCount = (visibleTrans.match(/[A-Za-z]/g) || []).length;
+
+    // Long English sentence without any Burmese words
+    if (asciiWords.length >= 4 || asciiLetterCount > 25) {
+      return { valid: false, reason: 'no_burmese_english_sentence' };
+    }
+
+    const origHasJapanese = /[\u3040-\u30FF\u4E00-\u9FFF]/.test(visibleOrig);
+    if (
+      origHasJapanese &&
+      /\b(i|you|he|she|we|they|what|why|who|where|when|how|wait|stop|don't|can't|won't|it's|that's|please|sorry)\b/i.test(
+        visibleTrans
+      )
+    ) {
+      return { valid: false, reason: 'jp_translated_to_english' };
+    }
+
+    // Exact copy of an English phrase containing lowercase dialogue words (e.g. "Wait here!")
+    if (
+      !origHasJapanese &&
+      visibleTrans.toLowerCase() === visibleOrig.toLowerCase() &&
+      /\s+[a-z]{2,}/.test(visibleTrans)
+    ) {
+      return { valid: false, reason: 'untranslated_english' };
+    }
+  }
+
+  return { valid: true };
+}
+
+
+/**
+ * Checks whether an ASS Actor (Name) field contains "Sign" or "Text" markers.
+ */
+export function hasSignOrTextActor(actor?: string): boolean {
+  const clean = (actor || '').trim();
+  if (!clean) return false;
+  return (
+    /(?:^|[^a-z])(?:sign|text)/i.test(clean) ||
+    /(?:Sign|Text)(?:$|[^a-z])/.test(clean)
+  );
+}
+
+/**
+ * Maps standard anime subtitle style names to Burmese production styles according to user rules:
+ * - Actor containing "Sign" or "Text" -> Sign_Basic
+ * - Default, BD DX, Main, Q0 -> Myanmar1
+ * - Top, On Top, Default - Top, DefaultTop, Bubble Song, Q7, Q1 -> TopMyanmr
+ * - overlap, italicstop -> TopMyanmar2
+ * - Italics, Main - Italics, DefaultItalics, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6 -> Myanmar2
+ * - Flashback -> Myanmar3
+ * - Flashback Italics -> Myanmar31
+ * - Sign_*, Signs, Q9, Q8, Q3, Q4, Q5 -> Sign_Basic
+ */
+export function mapStyleName(originalStyle: string, actor?: string): string {
+  if (hasSignOrTextActor(actor)) {
+    return 'Sign_Basic';
+  }
+  if (!originalStyle) return 'Myanmar1';
+  const s = originalStyle.trim();
+  const lower = s.toLowerCase();
+
+  // Sign_*, Signs, Q9, Q8, Q3, Q4, Q5 -> Sign_Basic
+  if (
+    lower.startsWith('sign_') ||
+    lower.startsWith('signs') ||
+    lower === 'signs' ||
+    ['q9', 'q8', 'q3', 'q4', 'q5'].includes(lower)
+  ) {
+    return 'Sign_Basic';
+  }
+
+  // Flashback Italics -> Myanmar31
+  if (lower === 'flashback italics' || lower === 'flashback italic' || lower === 'flashback_italics') {
+    return 'Myanmar31';
+  }
+
+  // Flashback -> Myanmar3
+  if (lower === 'flashback' || lower === 'flash_back') {
+    return 'Myanmar3';
+  }
+
+  // Italics, Main - Italics, DefaultItalics, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6 -> Myanmar2
+  if (
+    lower === 'italics' ||
+    lower === 'italic' ||
+    lower === 'main - italics' ||
+    lower === 'main - italic' ||
+    lower === 'defaultitalics' ||
+    lower === 'defaultitalic' ||
+    lower === 'default - italics' ||
+    lower === 'default - italic' ||
+    lower === 'default italics' ||
+    lower === 'default_italics' ||
+    lower === 'ed lyrics white' ||
+    lower === 'ed lyrics white - eng' ||
+    lower === 'q2' ||
+    lower === 'q6'
+  ) {
+    return 'Myanmar2';
+  }
+
+  // overlap, italicstop -> TopMyanmar2
+  if (lower === 'overlap' || lower === 'italicstop') {
+    return 'TopMyanmar2';
+  }
+
+  // Top, On Top, Default - Top, DefaultTop, Bubble Song, Q7, Q1 -> TopMyanmr
+  if (
+    lower === 'top' ||
+    lower === 'on top' ||
+    lower === 'default - top' ||
+    lower === 'defaulttop' ||
+    lower === 'default top' ||
+    lower === 'default_top' ||
+    lower === 'bubble song' ||
+    lower === 'q7' ||
+    lower === 'q1' ||
+    lower === 'topsign'
+  ) {
+    return 'TopMyanmr';
+  }
+
+  // Default, BD DX, Main, Q0 -> Myanmar1
+  if (
+    lower === 'default' ||
+    lower === 'bd dx' ||
+    lower === 'main' ||
+    lower === 'q0'
+  ) {
+    return 'Myanmar1';
+  }
+
+  return originalStyle;
+}
+
+/**
+ * User's exact custom Aegisub [V4+ Styles] library to inject into output ASS files
+ */
+export const BURMESE_STYLES = [
+  'Style: Narration,Myanmar Text,30,&H00FFFFFF,&H000000FF,&H00000050,&H00000050,0,-1,0,0,100,100,0,0,1,1,1,2,10,10,10,1',
+  'Style: sign_generic,Arial,20,&H00000000,&H000000FF,&H00FFFFFF,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1',
+  'Style: into,Small Fonts,20,&H00FFFFFF,&H002BFD10,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
+  'Style: into2,Bell MT,20,&H00C82B28,&H000000FF,&H00F8F8F9,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
+  'Style: Default1,Avatar Airbender,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
+  'Style: Myanmar1,Myanmar Text,35,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,1,1,2,10,10,10,1',
+  'Style: Default111,Myanmar Cherry Pro,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
+  'Style: 13,Agency FB,10,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,0,0,9,0,0,0,1',
+  'Style: Myanmar2,Myanmar Text,35,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,-1,0,0,100,100,0,0,1,1,1,2,10,10,10,1',
+  'Style: TopMyanmar2,Myanmar Text,30,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,-1,0,0,100,100,0,0,1,1,1,2,10,10,310,1',
+  'Style: TopMyanmar,Myanmar Text,30,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,1,1,2,10,10,310,1',
+  'Style: SignsMyanmr,Myanmar BoKaow,30,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,1,2,10,10,10,1',
+  'Style: Myanmar31,Myanmar Text,35,&H00FFFFFF,&H000000FF,&H00613618,&H00613618,-1,-1,0,0,100,100,0,0,1,1,1,2,10,10,10,1',
+  'Style: Myanmar3,Myanmar Text,35,&H00FFFFFF,&H000000FF,&H00613618,&H00613618,-1,0,0,0,100,100,0,0,1,1,1,2,10,10,10,1',
+  'Style: Default111 - Copy,Myanmar Cherry Pro,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
+  'Style: Default111 - Copy - Copy,Myanmar Cherry Pro,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
+  'Style: Default111 - Copy - Copy - Copy,Myanmar Cherry Pro,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
+  'Style: Episode,Myanmar Cherry Pro,10,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,0.5,0.5,7,0,0,0,1',
+  'Style: Default111 - Copy - Copy - Copy - Copy,Myanmar Cherry Pro,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
+  'Style: Default111 - Copy - Copy - Copy - Copy - Copy,Myanmar Cherry Pro,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
+  'Style: pow 1,Myanmar Cherry Pro,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
+  'Style: Sign_Basic,Myanmar Text,30,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,1,8,10,10,18,1',
+  'Style: TopMyanmar3,Myanmar Text,30,&H00FFFFFF,&H000000FF,&H00613618,&H00613618,-1,0,0,0,100,100,0,0,1,1,1,2,10,10,310,1',
+  'Style: TopMyanmr,Myanmar Text,35,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,1,1,8,10,10,10,1',
+  'Style: TopMyanmar32,Myanmar Text,30,&H00FFFFFF,&H000000FF,&H00613618,&H00613618,-1,-1,0,0,100,100,0,0,1,1,1,2,10,10,310,1',
+  'Style: NarrationTop,Myanmar Text,30,&H00FFFFFF,&H000000FF,&H00000050,&H00000050,0,-1,0,0,100,100,0,0,1,1,1,2,10,10,310,1',
+  'Style: MarqueeStyle,Myanmar AyarTyepwriter,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,-1,0,100,100,0,0,1,1,1,2,10,10,10,1',
+  'Style: CreditStyle,Myanmar AyarTyepwriter,15,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,1,1,2,10,10,10,1',
+];
+
+const SEASON_2_ANIME_PATTERNS = [
+  'tougen anki nikko kegon no taki hen',
+  'tougen anki nikkou kegon no taki hen',
+  'yasei no last boss ga arawareta',
+  'koori no jouheki',
+  'hotel inhumans',
+];
+
+/**
+ * Determines whether the uploaded file belongs to an anime that should show "Season 2".
+ */
+export function detectSeasonNumber(fileName: string): number {
+  const normalized = (fileName || '')
+    .replace(/\.(ass|srt)$/i, '')
+    .replace(/\.translated$/i, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!normalized) return 1;
+  return SEASON_2_ANIME_PATTERNS.some((title) => normalized.includes(title)) ? 2 : 1;
+}
+
+/**
+ * Extracts episode number from anime subtitle filenames such as:
+ * - "[Erai-raws] Koori no Jouheki 2nd Season - 07 [1080p...].ass" -> "7"
+ * - "[Erai-raws] jukishi - 20 [1080p...].ass" -> "20"
+ * - "Anime S02E03 [1080p].ass" -> "3"
+ * - "Tougen Anki - Nikko Kegon no Taki-hen - 12v2.srt" -> "12"
+ */
+export function extractEpisodeNumber(fileName: string): string {
+  const base = (fileName || '')
+    .replace(/\.(ass|srt)$/i, '')
+    .replace(/\.translated$/i, '')
+    .trim();
+
+  if (!base) return '1';
+
+  const formatEp = (raw: string): string => {
+    const cleaned = raw.replace(/^0+(?=\d)/, '');
+    return cleaned || '1';
+  };
+
+  // 1. Explicit S02E07 / Episode 07 / Ep 07 markers
+  const explicitMatch = base.match(/(?:^|[^a-z0-9])(?:S\d{1,2}\s*E|Episode|Ep\.?)\s*0*(\d{1,4}(?:\.\d+)?)(?=[^a-z0-9]|v\d|$)/i);
+  if (explicitMatch) {
+    return formatEp(explicitMatch[1]);
+  }
+
+  // Strip bracketed/parenthetical release metadata like [1080p], [MultiSub], [B66956E8], (WEB)
+  const withoutBrackets = base
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // 2. Standard fansub separator " - 07" or " - 07v2" near end (after removing [tags])
+  const dashMatches = [...withoutBrackets.matchAll(/\s-\s*0*(\d{1,4}(?:\.\d+)?)(?:v\d+)?(?=\s*(?:END|FINAL|$))/gi)];
+  if (dashMatches.length > 0) {
+    return formatEp(dashMatches[dashMatches.length - 1][1]);
+  }
+
+  // 3. Fallback: remove resolution/codec/season markers, then match trailing episode number
+  const cleanedForTrailing = withoutBrackets
+    .replace(/\b(?:\d{3,4}p|x26[45]|h\.?26[45]|10bit|8bit|season\s*\d+|\d+(?:st|nd|rd|th)\s+season)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const trailingMatch = cleanedForTrailing.match(/(?:^|[\s._#-])0*(\d{1,3}(?:\.\d+)?)(?:v\d+)?(?:\s*(?:END|FINAL))?$/i);
+  if (trailingMatch) {
+    return formatEp(trailingMatch[1]);
+  }
+
+  return '1';
+}
+
+/**
+ * Finds the Start timestamp of the first spoken dialogue line (skipping signs/titles, comments, and removed SFX)
+ * to use as the End timestamp for CreditStyle and MarqueeStyle.
+ */
+export function getFirstSpokenDialogueStart(events: AssEvent[]): string {
+  let bestStart: string | null = null;
+  let bestSeconds = Number.POSITIVE_INFINITY;
+
+  // Prefer actual non-empty spoken dialogue lines (not signs/titles)
+  for (const e of events) {
+    if (e.type !== 'Dialogue' || !e.isTranslatable) continue;
+    if (isSignOrTitle(e.name, e.style, e.text)) continue;
+    const visible = (e.text || '').replace(/\{[^}]*\}/g, '').replace(/\\[Nnh]/g, '').trim();
+    if (!visible) continue;
+
+    const secs = parseAssTimeToSeconds(e.start);
+    if (secs > 0 && secs < bestSeconds) {
+      bestSeconds = secs;
+      bestStart = e.start;
+    }
+  }
+
+  if (bestStart) return bestStart;
+
+  // Fallback to any translatable dialogue line with start > 0
+  for (const e of events) {
+    if (e.type !== 'Dialogue' || !e.isTranslatable) continue;
+    const secs = parseAssTimeToSeconds(e.start);
+    if (secs > 0 && secs < bestSeconds) {
+      bestSeconds = secs;
+      bestStart = e.start;
+    }
+  }
+
+  return bestStart || '0:00:10.00';
+}
+
+/**
+ * Checks whether the parsed subtitle events already contain the NaJu Anime 4-line header block.
+ */
+export function hasWatermarkEvents(events: AssEvent[]): boolean {
+  return events.some(
+    (e) =>
+      (e.style === '13' && e.text.includes('NaJu Anime')) ||
+      (e.style === 'MarqueeStyle' && e.text.includes('NaJu_NewAnime'))
+  );
+}
+
+/**
+ * Generates the 4 standard NaJu Anime header Dialogue lines tailored to the file's
+ * season, episode number, and first spoken dialogue start timestamp.
+ */
+export function buildWatermarkEvents(fileName: string, events: AssEvent[]): AssEvent[] {
+  const season = detectSeasonNumber(fileName);
+  const episode = extractEpisodeNumber(fileName);
+  const creditEnd = getFirstSpokenDialogueStart(events);
+
+  const makeEvent = (index: number, layer: string, start: string, end: string, style: string, text: string): AssEvent => ({
+    index,
+    type: 'Dialogue',
+    layer,
+    start,
+    end,
+    style,
+    name: '',
+    marginL: '0',
+    marginR: '0',
+    marginV: '0',
+    effect: '',
+    text,
+    originalText: text,
+    isTranslatable: false,
+  });
+
+  return [
+    makeEvent(
+      -4,
+      '0',
+      '0:00:00.00',
+      '0:28:56.98',
+      '13',
+      '{\\an2\\blur0.3\\fc&H2C3DEA&\\frx89\\t(19,23371,\\frx0)\\\\pos(618.667,10.667)}NaJu Anime'
+    ),
+    makeEvent(
+      -3,
+      '1',
+      '0:00:00.50',
+      '0:00:10.00',
+      'Episode',
+      `{\\fad(1000,1000)\\pos(1.6,0.667)}{\\c&H00FFFF&}Season ${season} - {\\c&HFFFFFF&}Episode ${episode}{\\c&H00FF00&}{\\c&HFFFFFF&}`
+    ),
+    makeEvent(
+      -2,
+      '2',
+      '0:00:00.00',
+      creditEnd,
+      'CreditStyle',
+      '{\\fad(1000,1000)\\pos(317.333,296.889)}TLC & Encoder : {\\c&H00D7FF&}NaJu'
+    ),
+    makeEvent(
+      -1,
+      '3',
+      '0:00:00.00',
+      creditEnd,
+      'MarqueeStyle',
+      '{\\fad(1000,1000)\\pos(317.333,318)}{\\c&HFFFF00&}https://t.me/NaJu_NewAnime'
+    ),
+  ];
+}
+
+/**
+ * Builds the complete ASS subtitle file string.
+ */
+export function buildAss(
+  parsedData: ParsedAssData,
+  translatedEvents?: AssEvent[],
+  applyStyleMapping = true,
+  prependedEvents: AssEvent[] = []
+): string {
+  const eventsToUse = [...prependedEvents, ...(translatedEvents || parsedData.events)];
+  const lines: string[] = [];
+
+  // Check if headerSection already has each exact style defined (avoid prefix false-positives like Default1 vs Default111)
+  const header = [...parsedData.headerSection];
+  if (applyStyleMapping) {
+    const existingStyleNames = new Set<string>();
+    for (const hLine of header) {
+      const m = hLine.match(/^\s*Style:\s*([^,]+)/i);
+      if (m) existingStyleNames.add(m[1].trim().toLowerCase());
+    }
+
+    const missingStyles = BURMESE_STYLES.filter((st) => {
+      const m = st.match(/^\s*Style:\s*([^,]+)/i);
+      const name = m ? m[1].trim().toLowerCase() : '';
+      return name.length > 0 && !existingStyleNames.has(name);
+    });
+
+    if (missingStyles.length > 0) {
+      // Find insertion point inside [V4+ Styles] after Format: (or after last Style: before [Events])
+      const stylesStartIdx = header.findIndex((l) => /^\s*\[v4\+? styles\]/i.test(l));
+      const eventsStartIdx = header.findIndex((l) => /^\s*\[events\]/i.test(l));
+      const searchEnd = eventsStartIdx !== -1 ? eventsStartIdx : header.length;
+
+      let insertIdx = -1;
+      for (let i = Math.max(0, stylesStartIdx); i < searchEnd; i++) {
+        if (/^\s*(Format|Style):/i.test(header[i])) {
+          insertIdx = i + 1;
+        }
+      }
+
+      if (insertIdx !== -1) {
+        header.splice(insertIdx, 0, ...missingStyles);
+      } else {
+        header.push(...missingStyles);
+      }
+    }
+  }
+
+  // 1. Header section (including [Script Info], [V4+ Styles], and [Events] with Format:)
+  lines.push(...header);
+
+  // 2. Events lines
+  for (const event of eventsToUse) {
+    const finalStyle = applyStyleMapping ? mapStyleName(event.style, event.name) : event.style;
+    const fields = [
+      event.layer,
+      event.start,
+      event.end,
+      finalStyle,
+      event.name,
+      event.marginL,
+      event.marginR,
+      event.marginV,
+      event.effect,
+      event.text,
+    ];
+    lines.push(`${event.type}: ${fields.join(',')}`);
+  }
+
+  // 3. Trailer section if any
+  if (parsedData.trailerSection.length > 0) {
+    lines.push('');
+    lines.push(...parsedData.trailerSection);
+  }
+
+  lines.push(''); // Trailing newline
+  return lines.join('\n');
+}
+
+/**
+ * Validates that the translated ASS content is a readable, compliant ASS file
+ * and preserves the required event count and timing.
+ */
+export function validateAss(
+  originalParsed: ParsedAssData,
+  translatedAssContent: string,
+  expectedPrependedCount = 0
+): { valid: boolean; errors: string[]; eventCount: number } {
+  const errors: string[] = [];
+
+  if (!translatedAssContent || translatedAssContent.trim().length === 0) {
+    errors.push('Translated ASS file content is empty.');
+    return { valid: false, errors, eventCount: 0 };
+  }
+
+  if (!translatedAssContent.includes('[Events]')) {
+    errors.push('Missing [Events] section in output ASS file.');
+  }
+
+  if (!translatedAssContent.includes('[V4+ Styles]') && !translatedAssContent.includes('[V4 Styles]')) {
+    errors.push('Missing styles section in output ASS file.');
+  }
+
+  const translatedParsed = parseAss(translatedAssContent);
+
+  if (translatedParsed.events.length !== originalParsed.events.length + expectedPrependedCount) {
+    errors.push(
+      `Event count mismatch: Expected ${originalParsed.events.length + expectedPrependedCount} events, but output has ${translatedParsed.events.length} events.`
+    );
+  } else {
+    // Check timestamps for each original event (offset by expectedPrependedCount watermark lines)
+    for (let i = 0; i < originalParsed.events.length; i++) {
+      const orig = originalParsed.events[i];
+      const trans = translatedParsed.events[i + expectedPrependedCount];
+      if (orig.start !== trans.start || orig.end !== trans.end) {
+        errors.push(`Timestamp mismatch at event ${i + 1}: expected ${orig.start}->${orig.end}, got ${trans.start}->${trans.end}`);
+        break; // Report first
+      }
+
+      const expectedMapped = mapStyleName(orig.style, orig.name);
+      if (trans.style !== orig.style && trans.style !== expectedMapped) {
+        errors.push(`Style mismatch at event ${i + 1}: expected ${orig.style} or ${expectedMapped}, got ${trans.style}`);
+        break;
+      }
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    eventCount: translatedParsed.events.length,
+  };
+}
