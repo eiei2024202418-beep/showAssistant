@@ -351,6 +351,7 @@ export function isSignOrTitle(actor: string, style: string, text: string): boole
   // 2. Explicit Sign/Title/Lyrics in Style name (including prompt mapped styles Q3, Q4, Q5, Q8, Q9)
   const signStyles = [
     'sign', 'signs', 'title', 'lyrics', 'credit', 'rpg_text_box',
+    'layer1_font1',
     'screen', 'card', 'phone', 'board', 'banner', 'caption', 'insert',
     'os_', 'onscreen', 'song', 'ed lyrics', 'op lyrics', 'q3', 'q4', 'q5', 'q8', 'q9'
   ];
@@ -657,13 +658,13 @@ export function hasSignOrTextActor(actor?: string): boolean {
 /**
  * Maps standard anime subtitle style names to Burmese production styles according to user rules:
  * - Actor containing "Sign" or "Text" -> Sign_Basic
- * - Default, BD DX, Main, Q0 -> Myanmar1
+ * - Default, BD DX, Main, Q0, Font1_OutlineShadow -> Myanmar1
  * - Top, On Top, Default - Top, DefaultTop, Bubble Song, Q7, Q1 -> TopMyanmr
  * - overlap, italicstop -> TopMyanmar2
  * - Italics, Main - Italics, DefaultItalics, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6 -> Myanmar2
  * - Flashback -> Myanmar3
  * - Flashback Italics -> Myanmar31
- * - Sign_*, Signs, Q9, Q8, Q3, Q4, Q5 -> Sign_Basic
+ * - Sign_*, Signs, Layer1_Font1, Q9, Q8, Q3, Q4, Q5 -> Sign_Basic
  */
 export function mapStyleName(originalStyle: string, actor?: string): string {
   if (hasSignOrTextActor(actor)) {
@@ -673,11 +674,12 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
   const s = originalStyle.trim();
   const lower = s.toLowerCase();
 
-  // Sign_*, Signs, Q9, Q8, Q3, Q4, Q5 -> Sign_Basic
+  // Sign_*, Signs, Layer1_Font1, Q9, Q8, Q3, Q4, Q5 -> Sign_Basic
   if (
     lower.startsWith('sign_') ||
     lower.startsWith('signs') ||
     lower === 'signs' ||
+    lower === 'layer1_font1' ||
     ['q9', 'q8', 'q3', 'q4', 'q5'].includes(lower)
   ) {
     return 'Sign_Basic';
@@ -734,12 +736,13 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     return 'TopMyanmr';
   }
 
-  // Default, BD DX, Main, Q0 -> Myanmar1
+  // Default, BD DX, Main, Q0, Font1_OutlineShadow -> Myanmar1
   if (
     lower === 'default' ||
     lower === 'bd dx' ||
     lower === 'main' ||
-    lower === 'q0'
+    lower === 'q0' ||
+    lower === 'font1_outlineshadow'
   ) {
     return 'Myanmar1';
   }

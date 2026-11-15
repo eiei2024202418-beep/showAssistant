@@ -142,6 +142,7 @@ test('mapStyleName correctly applies user style mapping rules', () => {
   assert.equal(mapStyleName('BD DX'), 'Myanmar1');
   assert.equal(mapStyleName('Main'), 'Myanmar1');
   assert.equal(mapStyleName('Q0'), 'Myanmar1');
+  assert.equal(mapStyleName('Font1_OutlineShadow'), 'Myanmar1');
 
   assert.equal(mapStyleName('Top'), 'TopMyanmr');
   assert.equal(mapStyleName('On Top'), 'TopMyanmr');
@@ -167,6 +168,7 @@ test('mapStyleName correctly applies user style mapping rules', () => {
 
   assert.equal(mapStyleName('Sign_Title'), 'Sign_Basic');
   assert.equal(mapStyleName('Signs'), 'Sign_Basic');
+  assert.equal(mapStyleName('Layer1_Font1'), 'Sign_Basic');
   assert.equal(mapStyleName('Q9'), 'Sign_Basic');
   assert.equal(mapStyleName('Q8'), 'Sign_Basic');
   assert.equal(mapStyleName('Q3'), 'Sign_Basic');
@@ -237,6 +239,7 @@ test('isSignOrTitle correctly exempts signs and titles even when Actor is blank'
   // 2. Files where Actor is completely blank ("")
   // By Style
   assert.equal(isSignOrTitle('', 'Sign_Basic', 'Police Station'), true);
+  assert.equal(isSignOrTitle('', 'Layer1_Font1', 'Guild Notice'), true);
   assert.equal(isSignOrTitle('', 'Signs', 'Welcome to Shibuya'), true);
   assert.equal(isSignOrTitle('', 'Q3', 'Tokyo High School'), true);
   assert.equal(isSignOrTitle('', 'Q8', 'Hospital Entrance'), true);
