@@ -510,13 +510,13 @@ Return a JSON array of objects with "index" (number matching input) and "transla
         ]
       : [
           { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
           { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
           { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
           { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
           { model: 'gemini-3.8-flash', thinking: ThinkingLevel.LOW, timeoutMs: 75000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 75000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
         ];
 
   let lastError: unknown;
@@ -526,7 +526,13 @@ Return a JSON array of objects with "index" (number matching input) and "transla
     const plan = attemptPlans[attempt - 1];
     const modelToUse = plan.model;
 
-    // Skip immediately if this model hit daily quota OR has a long >15s cooldown while a healthy alternate model exists
+    // Never re-call a model whose daily Free Tier quota is already exhausted
+    if (rateLimiter?.isDailyExhausted(modelToUse)) {
+      console.log(`[translate] Skipping attempt ${attempt}/${totalAttempts} (${modelToUse} daily quota exhausted)`);
+      continue;
+    }
+
+    // Skip if model has a long >15s cooldown while a healthy alternate model exists later
     const modelCooldownMs = rateLimiter?.getRemainingCooldownMs(modelToUse) ?? 0;
     const hasHealthyOtherModelLater = attemptPlans
       .slice(attempt)
@@ -537,13 +543,11 @@ Return a JSON array of objects with "index" (number matching input) and "transla
           (rateLimiter?.getRemainingCooldownMs(p.model) ?? 0) === 0
       );
 
-    if (rateLimiter?.isDailyExhausted(modelToUse) || (modelCooldownMs > 15000 && hasHealthyOtherModelLater)) {
-      if (hasHealthyOtherModelLater) {
-        console.log(
-          `[translate] Skipping attempt ${attempt}/${totalAttempts} (${modelToUse} cooldown=${Math.ceil(modelCooldownMs / 1000)}s) in favor of healthy alternate model`
-        );
-        continue;
-      }
+    if (modelCooldownMs > 15000 && hasHealthyOtherModelLater) {
+      console.log(
+        `[translate] Skipping attempt ${attempt}/${totalAttempts} (${modelToUse} cooldown=${Math.ceil(modelCooldownMs / 1000)}s) in favor of healthy alternate model`
+      );
+      continue;
     }
 
     try {
@@ -705,6 +709,12 @@ Return a JSON array of objects with "index" (number matching input) and "transla
     }
   }
 
+  if (!lastError) {
+    const dailyMsg = rateLimiter?.getLastDailyQuotaError();
+    throw new Error(
+      dailyMsg || 'All configured Gemini models have exceeded their Free Tier RequestsPerDay daily quota.'
+    );
+  }
   throw lastError;
 }
 
@@ -795,9 +805,9 @@ app.post('/api/translate/stream', async (req, res) => {
     // Detect nearby duplicate lines (consecutive like 1,2,3 or 1-line gap like 1 & 3)
     const nearbyDuplicateClusters = findNearbyDuplicateClusters(parsedData.events, 2);
 
-    // Process in focused micro-batches (~12 lines) so xhigh thinking finishes cleanly without timeouts,
-    // never splitting a nearby duplicate cluster across batch edges when avoidable
-    const BATCH_SIZE = 12;
+    // Process in balanced batches (~28 lines) to slash Free Tier RPD/RPM quota usage by >55% (~16 calls/episode)
+    // while never splitting a nearby duplicate cluster across batch edges when avoidable
+    const BATCH_SIZE = 28;
     const batches: BatchItemInput[][] = [];
     let cursor = 0;
     while (cursor < translatableEvents.length) {
@@ -1197,9 +1207,13 @@ app.post('/api/translate/stream', async (req, res) => {
   } catch (err: unknown) {
     console.error('[stream] Error in translate stream:', err);
     const errorMsg = err instanceof Error ? err.message : String(err);
+    const isDailyQuota = /RequestsPerDay|PerDay|daily/i.test(errorMsg) || (/429|RESOURCE_EXHAUSTED/i.test(errorMsg) && /retry in \d+h/i.test(errorMsg));
+    const friendlyMessage = isDailyQuota
+      ? `Free Tier Daily API Quota Exceeded (Google's daily request cap on your API key was reached). Please wait for the daily quota reset or select a Billing-enabled Paid API Key in Settings > Secrets. Details: ${errorMsg}`
+      : `Translation process encountered an error: ${errorMsg}`;
     sendEvent({
       type: 'error',
-      message: `Translation process encountered an error: ${errorMsg}`,
+      message: friendlyMessage,
     });
     res.end();
   }

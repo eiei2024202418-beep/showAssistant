@@ -43,7 +43,7 @@ export function parseRetryDelayMs(errMsg: string): number {
  */
 export function classifyApiError(errMsg: string): ApiErrorClassification {
   const isRateLimit = /429|RESOURCE_EXHAUSTED|rate[- ]?limit|quota/i.test(errMsg);
-  const isDailyQuotaExhausted = /RequestsPerDay|PerDay|daily/i.test(errMsg);
+  const isDailyQuotaExhausted = /RequestsPerDay|PerDay|\bper\s+day\b|daily|retry\s+in\s+\d+h/i.test(errMsg);
   const isTransientUnavailable = /503|UNAVAILABLE|high demand|overloaded|502|504|timed out|ECONNRESET|ETIMEDOUT/i.test(
     errMsg
   );
@@ -72,6 +72,7 @@ export class ModelRateLimiter {
   private cooldownKind = new Map<string, 'rate-limit' | 'high-demand'>();
   private consecutiveUnavailable = new Map<string, number>();
   private dailyExhausted = new Set<string>();
+  private lastDailyQuotaError = '';
   private lastScheduledAt = new Map<string, number>();
   private modelMutex = new Map<string, Promise<void>>();
   private customIntervals: Record<string, number>;
@@ -82,6 +83,10 @@ export class ModelRateLimiter {
 
   isDailyExhausted(model: string): boolean {
     return this.dailyExhausted.has(model);
+  }
+
+  getLastDailyQuotaError(): string {
+    return this.lastDailyQuotaError;
   }
 
   getRemainingCooldownMs(model: string): number {
@@ -99,6 +104,9 @@ export class ModelRateLimiter {
 
     if (classified.isDailyQuotaExhausted) {
       this.dailyExhausted.add(model);
+      if (errMsg) {
+        this.lastDailyQuotaError = errMsg;
+      }
       this.cooldownKind.set(model, 'rate-limit');
       this.cooldownUntil.set(model, Math.max(this.cooldownUntil.get(model) ?? 0, now + 600_000));
     } else if (classified.isRateLimit) {

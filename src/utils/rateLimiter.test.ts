@@ -68,4 +68,14 @@ test('ModelRateLimiter enforces cooldown and daily exhaustion tracking', async (
   limiter2.recordError('fresh-model', '503 UNAVAILABLE');
   const resetWait = limiter2.getRemainingCooldownMs('fresh-model');
   assert.ok(resetWait > 4000 && resetWait <= 6000);
+
+  const realDailyPayload =
+    '{"error":{"code":429,"message":"You exceeded your current quota... Quota exceeded for metric: generate_content_free_tier_requests, limit: 20, model: gemini-4-hydrogen, description: Generate content requests per day limit exceeded on Free Tier. Please retry in 8h20m58.577536482s.","status":"RESOURCE_EXHAUSTED"}}';
+  const classifiedRealDaily = classifyApiError(realDailyPayload);
+  assert.equal(classifiedRealDaily.isRateLimit, true);
+  assert.equal(classifiedRealDaily.isDailyQuotaExhausted, true);
+
+  limiter2.recordError('gemini-4-hydrogen', realDailyPayload);
+  assert.equal(limiter2.isDailyExhausted('gemini-4-hydrogen'), true);
+  assert.equal(limiter2.getLastDailyQuotaError(), realDailyPayload);
 });
