@@ -7,6 +7,7 @@ import {
   executeWithSafetyStepDown,
   SafetyBlockError,
 } from './src/utils/safetyStepDown.js';
+import { executeBatchWithAutoSplit } from './src/utils/batchResilience.js';
 import {
   parseAss,
   parseSrt,
@@ -221,7 +222,7 @@ Return a JSON array of objects with "index" (number) and "shortened" (concise Bu
         },
         runAttempt: async (safetySettings) => {
           const timeoutPromise = new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`Compression (${modelToUse}) timed out`)), 60000)
+            setTimeout(() => reject(new Error(`Compression (${modelToUse}) timed out`)), 90000)
           );
           const generatePromise = ai.models.generateContent({
             model: modelToUse,
@@ -311,21 +312,21 @@ async function repairInvalidLines(
     preferredModel === 'gemini-3.1-flash-lite'
       ? [
           { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 90000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 60000 },
-          { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 75000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 75000 },
         ]
       : preferredModel === 'gemini-4-hydrogen'
       ? [
           { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.HIGH, timeoutMs: 90000 },
           { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 90000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 60000 },
-          { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 75000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 75000 },
         ]
       : [
           { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 90000 },
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 60000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 75000 },
           { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.HIGH, timeoutMs: 90000 },
-          { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 75000 },
         ];
 
   let remaining = [...invalidLines];
@@ -499,34 +500,34 @@ Return a JSON array of objects with "index" (number matching input) and "transla
   const attemptPlans: { model: string; thinking?: ThinkingLevel; timeoutMs: number }[] =
     preferredModel === 'gemini-3.1-flash-lite'
       ? [
-          { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 90000 },
           { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
-          { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 75000 },
-          { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 105000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 90000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 105000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 90000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.LOW, timeoutMs: 90000 },
         ]
       : preferredModel === 'gemini-4-hydrogen'
       ? [
           { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
           { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 75000 },
-          { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 75000 },
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.LOW, timeoutMs: 75000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 105000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 105000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 90000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 90000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 90000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.LOW, timeoutMs: 90000 },
         ]
       : [
           { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
           { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
           { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
-          { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 90000 },
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.LOW, timeoutMs: 75000 },
-          { model: 'gemini-3.1-flash-lite', timeoutMs: 45000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 105000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 90000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 105000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 90000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.LOW, timeoutMs: 90000 },
         ];
 
   let lastError: unknown;
@@ -910,21 +911,36 @@ app.post('/api/translate/stream', async (req, res) => {
             percent: Math.max(5, Math.min(86, Math.round((completedLinesCount / translatableEvents.length) * 82))),
           });
 
-          const translatedBatch = await translateBatchWithRetry(
-            currentBatch,
-            sourceLanguage,
-            modelChoice,
-            rateLimiter,
-            (msg) => {
+          const translatedBatch = await executeBatchWithAutoSplit({
+            batch: currentBatch,
+            minSplitSize: 8,
+            onSplit: (origLen, firstLen, secondLen) => {
+              console.warn(`[translate] Auto-splitting timed-out/failed batch (${origLen} -> ${firstLen} + ${secondLen} lines)`);
               sendEvent({
                 type: 'status',
                 batchIndex: bIndex + 1,
                 totalBatches: batches.length,
-                statusMessage: msg,
+                statusMessage: `Dense batch (${origLen} lines) timed out — auto-splitting into ${firstLen} + ${secondLen} lines & retrying seamlessly...`,
                 percent: Math.max(5, Math.min(86, Math.round((completedLinesCount / translatableEvents.length) * 82))),
               });
-            }
-          );
+            },
+            translateFn: (subBatch) =>
+              translateBatchWithRetry(
+                subBatch,
+                sourceLanguage,
+                modelChoice,
+                rateLimiter,
+                (msg) => {
+                  sendEvent({
+                    type: 'status',
+                    batchIndex: bIndex + 1,
+                    totalBatches: batches.length,
+                    statusMessage: msg,
+                    percent: Math.max(5, Math.min(86, Math.round((completedLinesCount / translatableEvents.length) * 82))),
+                  });
+                }
+              ),
+          });
 
           // Instant local post-processing: Reconcile tags & apply fast local Burmese contractions (0 extra API calls per batch!)
           const batchResults = new Map<number, string>();
