@@ -428,10 +428,10 @@ export default function App() {
                 </select>
                 <p className="text-[11px] text-slate-400 px-1">
                   {modelChoice === 'gemini-3.8-flash'
-                    ? '🧠 Powered by Gemini 3.8 Flash with High Thinking & Block Most safety settings.'
+                    ? '🧠 Powered by Gemini 3.8 Flash with High Thinking & Block Most (Auto Step-Down) safety.'
                     : modelChoice === 'gemini-4-hydrogen'
-                    ? '🧠 Powered by Gemini 4 Hydrogen with High Thinking & Block Most safety settings.'
-                    : '⚡ Ultra-fast lightweight model (15 RPM Free Tier limit).'}
+                    ? '🧠 Powered by Gemini 4 Hydrogen with High Thinking & Block Most (Auto Step-Down) safety.'
+                    : '⚡ Ultra-fast lightweight model with Block Most (Auto Step-Down) safety.'}
                 </p>
               </div>
 

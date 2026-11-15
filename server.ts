@@ -2,26 +2,11 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { GoogleGenAI, Type, ThinkingLevel, HarmCategory, HarmBlockThreshold } from '@google/genai';
-
-const SAFETY_SETTINGS_BLOCK_MOST = [
-  {
-    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-    threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-    threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-    threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-    threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
-  },
-];
+import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
+import {
+  executeWithSafetyStepDown,
+  SafetyBlockError,
+} from './src/utils/safetyStepDown.js';
 import {
   parseAss,
   parseSrt,
@@ -205,9 +190,8 @@ Return a JSON array of objects with "index" (number) and "shortened" (concise Bu
         });
       }
 
-      const config: Record<string, unknown> = {
+      const baseConfig: Record<string, unknown> = {
         systemInstruction,
-        safetySettings: SAFETY_SETTINGS_BLOCK_MOST,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
@@ -223,20 +207,33 @@ Return a JSON array of objects with "index" (number) and "shortened" (concise Bu
       };
 
       if (modelToUse === 'gemini-4-hydrogen' || modelToUse === 'gemini-3.8-flash') {
-        config.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
+        baseConfig.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
       }
 
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Compression (${modelToUse}) timed out`)), 60000)
-      );
-
-      const generatePromise = ai.models.generateContent({
-        model: modelToUse,
-        contents: prompt,
-        config,
+      const { response } = await executeWithSafetyStepDown({
+        onStepDown: ({ fromLevel, toLevel, reason }) => {
+          console.warn(
+            `[safety] Compression (${modelToUse}) blocked at "${fromLevel.label}" (${reason}) -> Auto Step-Down to "${toLevel.label}"`
+          );
+          onStatus?.(
+            `Safety filter ("${fromLevel.label}") triggered during CPS optimization — Auto Step-Down to "${toLevel.label}" & retrying...`
+          );
+        },
+        runAttempt: async (safetySettings) => {
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Compression (${modelToUse}) timed out`)), 60000)
+          );
+          const generatePromise = ai.models.generateContent({
+            model: modelToUse,
+            contents: prompt,
+            config: {
+              ...baseConfig,
+              safetySettings,
+            },
+          });
+          return Promise.race([generatePromise, timeoutPromise]);
+        },
       });
-
-      const response = await Promise.race([generatePromise, timeoutPromise]);
       rateLimiter?.recordSuccess(modelToUse);
       const parsed: { index: number; shortened: string }[] = JSON.parse(response.text || '[]');
 
@@ -363,9 +360,8 @@ Return a JSON array of objects with "index" (integer) and "translated" (clean Bu
         });
       }
 
-      const config: Record<string, unknown> = {
+      const baseConfig: Record<string, unknown> = {
         systemInstruction: EXACT_USER_PROMPT,
-        safetySettings: SAFETY_SETTINGS_BLOCK_MOST,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
@@ -380,20 +376,34 @@ Return a JSON array of objects with "index" (integer) and "translated" (clean Bu
         },
       };
       if (plan.thinking) {
-        config.thinkingConfig = { thinkingLevel: plan.thinking };
+        baseConfig.thinkingConfig = { thinkingLevel: plan.thinking };
       }
 
       console.log(`[repair] Round ${round + 1}/${repairPlans.length}: repairing ${remaining.length} invalid line(s) via ${plan.model} (thinking=${plan.thinking || 'default'})...`);
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Repair (${plan.model}) timed out`)), plan.timeoutMs)
-      );
-      const generatePromise = ai.models.generateContent({
-        model: plan.model,
-        contents: prompt,
-        config,
+      const { response } = await executeWithSafetyStepDown({
+        onStepDown: ({ fromLevel, toLevel, reason }) => {
+          console.warn(
+            `[safety] Repair (${plan.model}) blocked at "${fromLevel.label}" (${reason}) -> Auto Step-Down to "${toLevel.label}"`
+          );
+          onStatus?.(
+            `Safety filter ("${fromLevel.label}") triggered during quality repair — Auto Step-Down to "${toLevel.label}" & retrying...`
+          );
+        },
+        runAttempt: async (safetySettings) => {
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Repair (${plan.model}) timed out`)), plan.timeoutMs)
+          );
+          const generatePromise = ai.models.generateContent({
+            model: plan.model,
+            contents: prompt,
+            config: {
+              ...baseConfig,
+              safetySettings,
+            },
+          });
+          return Promise.race([generatePromise, timeoutPromise]);
+        },
       });
-
-      const response = await Promise.race([generatePromise, timeoutPromise]);
       rateLimiter?.recordSuccess(plan.model);
       const parsed: { index: number; translated: string }[] = JSON.parse(response.text || '[]');
       const byIndex = new Map<number, string>();
@@ -557,9 +567,8 @@ Return a JSON array of objects with "index" (number matching input) and "transla
         });
       }
 
-      const config: Record<string, unknown> = {
+      const baseConfig: Record<string, unknown> = {
         systemInstruction,
-        safetySettings: SAFETY_SETTINGS_BLOCK_MOST,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
@@ -575,30 +584,42 @@ Return a JSON array of objects with "index" (number matching input) and "transla
       };
 
       if (plan.thinking) {
-        config.thinkingConfig = { thinkingLevel: plan.thinking };
+        baseConfig.thinkingConfig = { thinkingLevel: plan.thinking };
       }
 
       console.log(`[translate] Calling ${modelToUse} (thinking=${plan.thinking || 'default'}) for ${batch.length} lines (attempt ${attempt}/${totalAttempts})...`);
       const t0 = Date.now();
 
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Model ${modelToUse} timed out after ${plan.timeoutMs / 1000}s`)), plan.timeoutMs)
-      );
+      const { response, usedLevel, didStepDown } = await executeWithSafetyStepDown({
+        onStepDown: ({ fromLevel, toLevel, reason }) => {
+          console.warn(
+            `[safety] ${modelToUse} blocked at "${fromLevel.label}" (${reason}) for ${batch.length} lines -> Auto Step-Down to "${toLevel.label}"`
+          );
+          onStatus?.(
+            `Safety filter ("${fromLevel.label}") triggered — Auto Step-Down to "${toLevel.label}" & retrying...`
+          );
+        },
+        runAttempt: async (safetySettings) => {
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Model ${modelToUse} timed out after ${plan.timeoutMs / 1000}s`)), plan.timeoutMs)
+          );
 
-      const generatePromise = ai.models.generateContent({
-        model: modelToUse,
-        contents: prompt,
-        config,
+          const generatePromise = ai.models.generateContent({
+            model: modelToUse,
+            contents: prompt,
+            config: {
+              ...baseConfig,
+              safetySettings,
+            },
+          });
+
+          return Promise.race([generatePromise, timeoutPromise]);
+        },
       });
-
-      const response = await Promise.race([generatePromise, timeoutPromise]);
       rateLimiter?.recordSuccess(modelToUse);
-      console.log(`[translate] ${modelToUse} responded in ${Date.now() - t0}ms`);
-
-      const finishReason = response.candidates?.[0]?.finishReason;
-      if (finishReason === 'SAFETY') {
-        throw new Error(`Response blocked by "Block most" safety settings (${modelToUse})`);
-      }
+      console.log(
+        `[translate] ${modelToUse} responded in ${Date.now() - t0}ms (safety="${usedLevel.label}"${didStepDown ? ', stepped-down' : ''})`
+      );
 
       const responseText = response.text || '[]';
       const parsed: { index: number; translated: string }[] = JSON.parse(responseText);
@@ -686,8 +707,8 @@ Return a JSON array of objects with "index" (number matching input) and "transla
               (rateLimiter?.getRemainingCooldownMs(p.model) ?? 0) === 0
           );
 
-        if (switchingHealthyModel) {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (switchingHealthyModel || err instanceof SafetyBlockError) {
+          await new Promise((resolve) => setTimeout(resolve, err instanceof SafetyBlockError ? 500 : 1000));
         } else {
           const backoffMs = classified?.isRateLimit
             ? Math.max(classified.retryDelayMs, 10000)
