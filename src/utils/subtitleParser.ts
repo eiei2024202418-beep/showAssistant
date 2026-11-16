@@ -2,7 +2,7 @@
  * Subtitle parser and serializer for ASS and SRT formats.
  */
 
-import { reconcileTags } from './tagProtector';
+import { reconcileTags, stripLineBreaksForDialogue } from './tagProtector';
 
 export const STANDARD_ASS_TOP_HEADER: readonly string[] = [
   '[Script Info]',
@@ -360,12 +360,15 @@ export function isSignOrTitle(actor: string, style: string, text: string): boole
 
   // 2. Explicit Sign/Title/Lyrics in Style name (including prompt mapped styles Q3, Q4, Q5, Q8, Q9)
   const signStyles = [
-    'sign', 'signs', 'title', 'lyrics', 'credit', 'rpg_text_box',
-    'layer1_font1',
+    'sign', 'signs', 'title', 'lyric', 'lyrics', 'credit', 'rpg_text_box',
+    'layer1_font1', 'karaoke', 'kashi', 'opening', 'ending',
     'screen', 'card', 'phone', 'board', 'banner', 'caption', 'insert',
     'os_', 'onscreen', 'song', 'ed lyrics', 'op lyrics', 'q3', 'q4', 'q5', 'q8', 'q9'
   ];
-  if (signStyles.some((k) => styleClean === k || styleClean.startsWith(k) || styleClean.includes(k))) {
+  if (
+    signStyles.some((k) => styleClean === k || styleClean.startsWith(k) || styleClean.includes(k)) ||
+    /(?:^|[\s_.-])(?:text|note|op|ed|os|bgm)(?:$|[\s_.-])/i.test(styleClean)
+  ) {
     return true;
   }
 
@@ -523,11 +526,21 @@ export function unifyNearbyDuplicateTranslations(
 
     for (const memberIdx of cluster.memberIndices) {
       if (!translatedMap.has(memberIdx)) continue;
-      const memberOriginal = events[memberIdx]?.text ?? '';
+      const memberEvent = events[memberIdx];
+      const memberOriginal = memberEvent?.text ?? '';
+      const preserveLineBreaks = memberEvent
+        ? isSignOrTitle(memberEvent.name, memberEvent.style, memberEvent.text)
+        : true;
       if (memberOriginal === canonicalOriginal) {
-        translatedMap.set(memberIdx, canonicalTranslated);
+        translatedMap.set(
+          memberIdx,
+          preserveLineBreaks ? canonicalTranslated : stripLineBreaksForDialogue(canonicalTranslated)
+        );
       } else {
-        translatedMap.set(memberIdx, reconcileTags(memberOriginal, cleanCanonicalBody));
+        translatedMap.set(
+          memberIdx,
+          reconcileTags(memberOriginal, cleanCanonicalBody, { preserveLineBreaks })
+        );
       }
     }
   }
@@ -705,7 +718,7 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     return 'Myanmar3';
   }
 
-  // Italics, Main - Italics, DefaultItalics, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6 -> Myanmar2
+  // Italics, Main - Italics, DefaultItalics, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6, s7 -> Myanmar2
   if (
     lower === 'italics' ||
     lower === 'italic' ||
@@ -720,7 +733,8 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     lower === 'ed lyrics white' ||
     lower === 'ed lyrics white - eng' ||
     lower === 'q2' ||
-    lower === 'q6'
+    lower === 'q6' ||
+    lower === 's7'
   ) {
     return 'Myanmar2';
   }
@@ -1274,9 +1288,13 @@ export function buildAss(
   const normalizedSourceEvents = applyStyleMapping
     ? sourceEvents.map((event) => {
         const isSign = isSignOrTitle(event.name, event.style, event.text);
+        let normalizedText = normalizeEventTextForTargetPlayRes(event.text, scaleX, scaleY, isSign);
+        if (event.type === 'Dialogue' && !isSign) {
+          normalizedText = stripLineBreaksForDialogue(normalizedText);
+        }
         return {
           ...event,
-          text: normalizeEventTextForTargetPlayRes(event.text, scaleX, scaleY, isSign),
+          text: normalizedText,
         };
       })
     : sourceEvents;

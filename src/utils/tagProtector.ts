@@ -51,17 +51,79 @@ export function removeTrailingPeriods(text: string): string {
 }
 
 /**
- * Reconciles translated text with original tags and line breaks.
+ * Removes ASS line-break tokens (\N, \n) and literal newlines from spoken dialogue while
+ * keeping all ASS override tags ({...}) untouched and joining visible clauses cleanly with a single space.
+ */
+export function stripLineBreaksForDialogue(text: string): string {
+  if (!text) return text;
+
+  const tokens = text.split(/(\{[^}]*\})/g);
+  const tokenHasVisible = tokens.map((tok, idx) => {
+    if (idx % 2 === 1) return false;
+    return tok.replace(/\\[Nn]|\r\n|\r|\n/g, '').trim().length > 0;
+  });
+
+  const hasVisibleAfter: boolean[] = new Array(tokens.length).fill(false);
+  let seenVisibleAfter = false;
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    hasVisibleAfter[i] = seenVisibleAfter;
+    if (tokenHasVisible[i]) seenVisibleAfter = true;
+  }
+
+  let seenVisibleBefore = false;
+  let out = '';
+
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (i % 2 === 1) {
+      out += tok;
+      continue;
+    }
+
+    const replaced = tok.replace(/(?:[ \t]*(?:\\[Nn]|\r\n|\r|\n)[ \t]*)+/g, (match, offset: number, whole: string) => {
+      const beforeInTok = whole.slice(0, offset).replace(/\\[Nn]|\r\n|\r|\n/g, '').trim().length > 0;
+      const afterInTok = whole.slice(offset + match.length).replace(/\\[Nn]|\r\n|\r|\n/g, '').trim().length > 0;
+
+      const hasBefore = seenVisibleBefore || beforeInTok;
+      const hasAfter = afterInTok || hasVisibleAfter[i];
+
+      return hasBefore && hasAfter ? ' ' : '';
+    });
+
+    out += replaced;
+    if (tokenHasVisible[i]) {
+      seenVisibleBefore = true;
+    }
+  }
+
+  return out;
+}
+
+export interface ReconcileTagsOptions {
+  /** Keep \N line breaks (true for Signs/Text/Title/Lyrics; false for Spoken Dialogue). Defaults to true. */
+  preserveLineBreaks?: boolean;
+}
+
+/**
+ * Reconciles translated text with original tags and optional line breaks.
  * Ensures:
  * 1. Any tags {..} that were at the beginning stay at the beginning.
  * 2. Any tags {..} that were at the end stay at the end.
  * 3. Any intermediate tags that got lost are preserved.
- * 4. Literal \N line breaks are preserved (replacing raw newlines if the model introduced any).
+ * 4. Literal \N line breaks are preserved ONLY when `preserveLineBreaks` is true (Signs/Titles/Lyrics),
+ *    and removed cleanly into a single line when `preserveLineBreaks` is false (Spoken Dialogue).
  * 5. Trailing periods on dialogue/names are removed per anime subtitle rule.
  */
-export function reconcileTags(originalText: string, translatedText: string): string {
+export function reconcileTags(
+  originalText: string,
+  translatedText: string,
+  options?: ReconcileTagsOptions
+): string {
+  const preserveLineBreaks = options?.preserveLineBreaks ?? true;
+
   if (!originalText) {
-    return translatedText || '';
+    const raw = translatedText || '';
+    return preserveLineBreaks ? raw : stripLineBreaksForDialogue(raw);
   }
 
   // If the model intentionally emptied the dialogue text (e.g., removing JP () SFX or groans),
@@ -72,7 +134,7 @@ export function reconcileTags(originalText: string, translatedText: string): str
     return prefixMatch ? prefixMatch[0] : '';
   }
 
-  // Normalize any literal newlines the LLM might have returned into ASS \N
+  // Normalize any literal newlines the LLM might have returned into ASS \N (or strip later for dialogue)
   let result = translatedText
     .replace(/\r\n/g, '\\N')
     .replace(/\n/g, '\\N')
@@ -87,13 +149,6 @@ export function reconcileTags(originalText: string, translatedText: string): str
   let m: RegExpExecArray | null;
   while ((m = tagRegex.exec(originalText)) !== null) {
     originalTags.push(m[0]);
-  }
-
-  // Extract all tags currently in translated text
-  const currentTags: string[] = [];
-  tagRegex.lastIndex = 0;
-  while ((m = tagRegex.exec(result)) !== null) {
-    currentTags.push(m[0]);
   }
 
   // Check prefix tags in original (tags occurring before any non-tag characters)
@@ -142,7 +197,11 @@ export function reconcileTags(originalText: string, translatedText: string): str
     }
   }
 
-  // Check \N line breaks
+  if (!preserveLineBreaks) {
+    return removeTrailingPeriods(stripLineBreaksForDialogue(result));
+  }
+
+  // Check \N line breaks for Sign/Title/Lyrics
   const origLineBreakCount = (originalText.match(/\\N/g) || []).length;
   const currentLineBreakCount = (result.match(/\\N/g) || []).length;
 

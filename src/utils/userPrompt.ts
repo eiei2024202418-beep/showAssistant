@@ -48,7 +48,7 @@ Jp စာတန်းထိုးတွေအတွက်သီးသန့် -
 Default, BD DX, Main, Q0, Font1_OutlineShadow -> Myanmar1
 Top, On Top, Default - Top, DefaultTop, Bubble Song, Q7, Q1  -> TopMyanmr
 overlap, italicstop -> TopMyanmar2
-Italics, Main - Italics, DefaultItalics, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6 -> Myanmar2
+Italics, Main - Italics, DefaultItalics, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6, s7  -> Myanmar2
 Flashback -> Myanmar3
 Flashback Italics -> Myanmar31
 Sign_*, Signs, Layer1_Font1, Q9, Q8, Q3, Q4, Q5 -> Sign_Basic

@@ -345,7 +345,7 @@ YOUR TASK:
 Translate EACH line cleanly and accurately into natural spoken Burmese following the exact system prompt rules:
 1. NEVER copy or leave source Japanese/Kanji/Kana or foreign scripts (Thai, Lao, Korean, Indic, Cyrillic) in "translated" — even if the source line has ASS tags like {\\i1} or quotation marks like "部長"!
 2. Output ONLY pure Burmese Unicode (မြန်မာစာ) plus ASCII/Romaji character names where natural.
-3. Preserve all ASS tags {\\...} and \\N line breaks from "originalText". Never output timecodes or trailing periods (.).
+3. Preserve all ASS tags {\\...} from "originalText". If "isDialogue" is true, output a SINGLE line without \\N line breaks; if "isDialogue" is false (Signs/Text/Title/Lyrics), preserve \\N line breaks intact. Never output timecodes or trailing periods (.).
 4. If "isDialogue" is true and "maxChars" is provided, keep Aegisub visible char count <= maxChars (CPS < 10).
 5. Only return "" if "originalText" is purely a parenthetical SFX/groan note like （ため息）.
 
@@ -479,13 +479,14 @@ async function translateBatchWithRetry(
    - ကြည့်ရှုသူ စာဖတ်ချိန်မီစေရန် Aegisub CPS ကို 10 အောက် (CPS < 10) ဖြစ်အောင် အတိုဆုံးနှင့် အထိမိဆုံး ပြန်ပေးရမည်။
    - ⚠️ အရေးကြီး: Aegisub သည် မြန်မာစာတွင် သရ/အသတ်/ဝစ္စပေါက် (ေ, ာ, ါ, း) များကိုပါ စာလုံးတစ်လုံးစီ ရေတွက်သောကြောင့် မြန်မာတစ်သံလျှင် ~2 chars ခန့် ရှိသည် (ဥပမာ: "သုံးနေတာလား" = 8 chars)။ ထို့ကြောင့် "maxChars" အောက် ဝင်စေရန် အတိုဆုံး စကားပြောကိုသာ ရွေးပါ။
    - duration တိုသော (<1.5s) စာကြောင်းများတွင် အင်္ဂလိပ် Skill/Item နာမည်ရှည်ကြီးများက maxChars ကို ကျော်နေပါက အတိုချုံး/မြန်မာလို အတိုပြန်၍ maxChars အောက် ဝင်အောင် ရေးပါ။
-၂။ On-screen Signs / Text / Title များ (isDialogue: false):
-   - Actor သို့မဟုတ် Style သည် SIGN, TEXT, TITLE, NOTE ဖြစ်ပါက CPS ကန့်သတ်ချက် မလိုအပ်ပါ။ မူရင်းအတိုင်း တိကျစွာ ပြန်ပါ။
+   - ဇာတ်ကောင်ပြောသော Spoken Dialogue (isDialogue: true) များတွင် \\N (line break) များ မထည့်ဘဲ တစ်ကြောင်းတည်း (single line) အဖြစ်သာ ပြန်ပေးပါ။
+၂။ On-screen Signs / Text / Title / Lyrics များ (isDialogue: false):
+   - Actor သို့မဟုတ် Style သည် SIGN, TEXT, TITLE, LYRICS, NOTE ဖြစ်ပါက CPS ကန့်သတ်ချက် မလိုအပ်ပါ။ မူရင်းအတိုင်း တိကျစွာ ပြန်ပြီး မူရင်း \\N line break များကို ဆက်လက် ထိန်းသိမ်းပေးပါ။
 ၃။ Jp စာတန်းထိုးတွေအတွက်သီးသန့် - () စာသားတွေ နဲ့ ညည်းသံလေသံတွေပါလာရင် ဖျက်ထုတ်ပါ Text ပဲ ဖျက်ပါ လှိုင်းမဖျက်ပါနဲ့:
    - စာကြောင်းတစ်ခုလုံးသည် (...) သို့မဟုတ် ညည်းသံ/အသက်ရှူသံ/လေသံသက်သက်သာဖြစ်ပါက "translated" ကို "" (empty string) အဖြစ် ပြန်ပေးပါ (index ကို လုံးဝ မချန်ထားရ၊ လိုင်းမဖျက်ရ)။
 ၄။ ပူးနေသော သို့မဟုတ် ၁ ကြောင်းခြား စာသားတူလိုင်းများ (duplicateGroupId ပါဝင်သော လိုင်းများ):
    - မူရင်းစာသားတူနေ၍ "duplicateGroupId" တူညီနေသော လိုင်းအားလုံးကို မြန်မာဘာသာပြန် စာသား တစ်ထပ်တည်း (EXACT SAME Burmese dialogue) ထွက်အောင် ပြန်ပေးရမည်။ CPS များနေလည်း ပြဿနာမရှိပါ (allowHighCps: true) — CPS ချရန်အတွက် ဘာသာပြန် မတူအောင် မပြောင်းရ။ (duplicateGroupId မပါသည့် ဝေးကွာသော လိုင်းများတွင်မူ ပုံမှန် CPS < 10 ထိန်းပါ)။
-၅။ ဘာသာပြန်ထဲတွင် Timecode များ လုံးဝ မထည့်ရ။ ASS Tag {\\...} များနှင့် \\N များကို မပျက်မစီး ထိန်းသိမ်းပါ။ အဆုံးတွင် ပုဒ်မ (.) မထည့်ရ။
+၅။ ဘာသာပြန်ထဲတွင် Timecode များ လုံးဝ မထည့်ရ။ ASS Tag {\\...} များကို မပျက်မစီး ထိန်းသိမ်းပါ (isDialogue: true တွင် \\N ဖျက်၍ တစ်ကြောင်းတည်း ရေးပါ၊ Signs/Title/Lyrics တွင် \\N ကို ဆက်လက် ထိန်းသိမ်းပါ)။ အဆုံးတွင် ပုဒ်မ (.) မထည့်ရ။
 ၆။ ဘာသာစကား သန့်ရှင်းမှု (STRICT LANGUAGE PURITY):
    - မူရင်း ဂျပန်/အင်္ဂလိပ်စာသားများကို ဘာသာမပြန်ဘဲ လုံးဝ မချန်ထားရ ({\\i1} ကဲ့သို့ ASS Tag များ သို့မဟုတ် "..." မျက်တောင်အဖွင့်အပိတ်များ ပါနေသော်လည်း စာသားအားလုံးကို မြန်မာလို အပြည့်အစုံ ပြန်ပေးရမည်)။
    - မြန်မာစာထဲတွင် ထိုင်း (ဥပမာ ค), လာအို (ဥပမာ ະ), ကိုရီးယား, ဟိန္ဒီ, ရုရှား, သို့မဟုတ် ဂျပန်/တရုတ် စာလုံးများ လုံးဝ မရောထည့်ရ။ မြန်မာ Unicode စာလုံးများ (နှင့် လိုအပ်သော Romaji နာမည်များ) ကိုသာ ထုတ်ပေးရမည်။
@@ -946,9 +947,9 @@ app.post('/api/translate/stream', async (req, res) => {
           const batchResults = new Map<number, string>();
           for (const item of translatedBatch) {
             const origEvent = parsedData.events[item.index];
-            let safeTranslated = reconcileTags(origEvent.text, item.translated);
-            const duration = getEventDuration(origEvent.start, origEvent.end);
             const isSign = isSignOrTitle(origEvent.name, origEvent.style, origEvent.text);
+            let safeTranslated = reconcileTags(origEvent.text, item.translated, { preserveLineBreaks: isSign });
+            const duration = getEventDuration(origEvent.start, origEvent.end);
             const isNearbyDup = nearbyDuplicateClusters.has(item.index);
 
             if (!isSign && !isNearbyDup) {
@@ -977,11 +978,13 @@ app.post('/api/translate/stream', async (req, res) => {
 
           for (const item of translatedBatch) {
             const origEvent = parsedData.events[item.index];
-            const finalText = batchResults.get(item.index) ?? reconcileTags(origEvent.text, item.translated);
+            const isSign = isSignOrTitle(origEvent.name, origEvent.style, origEvent.text);
+            const finalText =
+              batchResults.get(item.index) ??
+              reconcileTags(origEvent.text, item.translated, { preserveLineBreaks: isSign });
             translatedMap.set(item.index, finalText);
 
             const duration = getEventDuration(origEvent.start, origEvent.end);
-            const isSign = isSignOrTitle(origEvent.name, origEvent.style, origEvent.text);
             const finalCps = calculateCps(finalText, duration);
 
             previewList.push({
@@ -1071,7 +1074,8 @@ app.post('/api/translate/stream', async (req, res) => {
           const fixed = repairedChunk.get(reqItem.index);
           if (fixed !== undefined) {
             const origEvent = parsedData.events[reqItem.index];
-            let safeFixed = reconcileTags(origEvent.text, fixed);
+            const isSign = isSignOrTitle(origEvent.name, origEvent.style, origEvent.text);
+            let safeFixed = reconcileTags(origEvent.text, fixed, { preserveLineBreaks: isSign });
             if (reqItem.isDialogue && reqItem.maxChars) {
               safeFixed = contractBurmeseForCps(safeFixed, reqItem.maxChars);
             }
@@ -1122,7 +1126,7 @@ app.post('/api/translate/stream', async (req, res) => {
         for (const lineToFix of chunk) {
           const origEvent = parsedData.events[lineToFix.index];
           let compressed = compressedMap.get(lineToFix.index) || lineToFix.currentBurmese;
-          compressed = reconcileTags(origEvent.text, compressed);
+          compressed = reconcileTags(origEvent.text, compressed, { preserveLineBreaks: false });
           compressed = contractBurmeseForCps(compressed, lineToFix.maxChars);
           translatedMap.set(lineToFix.index, compressed);
 
@@ -1150,7 +1154,7 @@ app.post('/api/translate/stream', async (req, res) => {
             const origEvent = parsedData.events[lineToFix.index];
             const candidate = strictMap.get(lineToFix.index);
             if (candidate) {
-              let finalCompressed = reconcileTags(origEvent.text, candidate);
+              let finalCompressed = reconcileTags(origEvent.text, candidate, { preserveLineBreaks: false });
               finalCompressed = contractBurmeseForCps(finalCompressed, lineToFix.maxChars);
               const prevText = translatedMap.get(lineToFix.index) || lineToFix.currentBurmese;
               if (calculateCps(finalCompressed, lineToFix.durationSec) < calculateCps(prevText, lineToFix.durationSec)) {

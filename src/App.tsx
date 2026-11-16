@@ -488,7 +488,7 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-1.5 text-slate-400">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span>Preserves {'{\\an8}'}, {'{\\pos}'}, colors, &amp; literal \N breaks</span>
+                  <span>Single-line dialogue; keeps {'{\\an8}'}, {'{\\pos}'}, tags &amp; Sign \N breaks</span>
                 </div>
                 <div className="flex items-center gap-1.5 text-slate-400">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -611,7 +611,7 @@ export default function App() {
                     </span>
                   </h3>
                   <p className="text-xs text-slate-300 mt-1">
-                    All original ASS styles, positioning tags, colors, and line breaks are intact. Output verified as a valid ASS subtitle file.
+                    All ASS styles, positioning tags, colors, and Sign/Lyrics \N breaks are intact; spoken dialogue formatted as single lines. Output verified as a valid ASS subtitle file.
                   </p>
                 </div>
               </div>
