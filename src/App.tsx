@@ -16,12 +16,25 @@ import {
   RefreshCw,
   Clock,
   Layers,
-  ArrowRight,
   ShieldCheck,
   Zap,
+  Play,
+  RotateCcw,
+  Trash2,
+  HardDrive,
 } from 'lucide-react';
 import { SubtitleViewer, PreviewItem } from './components/SubtitleViewer';
 import { SAMPLE_JAPANESE_ASS, SAMPLE_ENGLISH_SRT } from './data/sampleSubtitles';
+import {
+  computeFileSignature,
+  saveCheckpoint,
+  loadCheckpointBySignature,
+  findLatestCheckpoint,
+  clearCheckpoint,
+  mergeCheckpointPreviewItems,
+  getCheckpointTranslatedCount,
+  type TranslationCheckpoint,
+} from './utils/checkpoint';
 
 export default function App() {
   const [file, setFile] = useState<{ name: string; size: number; content: string } | null>(null);
@@ -37,6 +50,9 @@ export default function App() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
 
+  // Auto-Save Checkpoint State
+  const [savedCheckpoint, setSavedCheckpoint] = useState<TranslationCheckpoint | null>(null);
+
   // Results
   const [translatedAss, setTranslatedAss] = useState<string>('');
   const [downloadFileName, setDownloadFileName] = useState<string>('');
@@ -45,7 +61,15 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Restore any unfinished checkpoint on initial page load
+  useEffect(() => {
+    const latest = findLatestCheckpoint();
+    if (latest) {
+      setSavedCheckpoint(latest);
+    }
+  }, []);
 
   // Manage elapsed timer
   useEffect(() => {
@@ -61,6 +85,12 @@ export default function App() {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [status]);
+
+  const currentFileSignature = file ? computeFileSignature(file.name, file.content) : null;
+  const matchingCheckpoint =
+    savedCheckpoint && currentFileSignature && savedCheckpoint.signature === currentFileSignature
+      ? savedCheckpoint
+      : null;
 
   const handleFileLoad = (name: string, content: string, size: number) => {
     // Validate extension
@@ -79,8 +109,30 @@ export default function App() {
     setFile({ name, size, content });
     setStatus('idle');
     setTranslatedAss('');
-    setPreviewItems([]);
-    setStats(null);
+
+    // Check if an unfinished checkpoint already exists for this exact file
+    const signature = computeFileSignature(name, content);
+    const existingCp = loadCheckpointBySignature(signature);
+    if (existingCp) {
+      setSavedCheckpoint(existingCp);
+      setSourceLanguage(existingCp.sourceLanguage);
+      setModelChoice(existingCp.modelChoice);
+      setPreviewItems(existingCp.previewItems);
+      setStats({
+        totalEvents: existingCp.totalEvents,
+        translatableCount: existingCp.translatableCount,
+      });
+      const savedCount = getCheckpointTranslatedCount(existingCp);
+      const pct = existingCp.translatableCount > 0
+        ? Math.min(95, Math.round((savedCount / existingCp.translatableCount) * 100))
+        : 0;
+      setProgressPercent(pct);
+    } else {
+      setPreviewItems([]);
+      setStats(null);
+      setProgressPercent(0);
+      setSavedCheckpoint(findLatestCheckpoint());
+    }
   };
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -119,14 +171,99 @@ export default function App() {
     }
   };
 
-  const startTranslation = async () => {
-    if (!file) return;
+  const handleDiscardCheckpoint = (cp: TranslationCheckpoint) => {
+    clearCheckpoint(cp.signature);
+    if (currentFileSignature && cp.signature === currentFileSignature) {
+      setPreviewItems([]);
+      setStats(null);
+      setProgressPercent(0);
+    }
+    setSavedCheckpoint(findLatestCheckpoint());
+    setErrorMessage('');
+  };
+
+  const startTranslation = async (options?: {
+    resumeFrom?: TranslationCheckpoint | null;
+    forceRestart?: boolean;
+  }) => {
+    const resumeTarget = options?.forceRestart
+      ? null
+      : options?.resumeFrom !== undefined
+      ? options.resumeFrom
+      : matchingCheckpoint;
+
+    const targetFile = resumeTarget
+      ? {
+          name: resumeTarget.fileName,
+          size: resumeTarget.fileSize,
+          content: resumeTarget.fileContent,
+        }
+      : file;
+
+    if (!targetFile) return;
+
+    const targetSourceLang = resumeTarget ? resumeTarget.sourceLanguage : sourceLanguage;
+    const targetModelChoice = resumeTarget ? resumeTarget.modelChoice : modelChoice;
+    const fileSignature = computeFileSignature(targetFile.name, targetFile.content);
+
+    // Sync UI state when resuming directly from a saved checkpoint banner
+    if (resumeTarget) {
+      setFile(targetFile);
+      setSourceLanguage(targetSourceLang);
+      setModelChoice(targetModelChoice);
+    }
+
+    if (options?.forceRestart) {
+      clearCheckpoint(fileSignature);
+      setSavedCheckpoint(findLatestCheckpoint());
+    }
+
+    let accumulatedPreview: PreviewItem[] = resumeTarget ? [...resumeTarget.previewItems] : [];
+    const accumulatedLines: Record<string, string> = resumeTarget
+      ? { ...resumeTarget.translatedLines }
+      : {};
+    let knownTotalEvents = resumeTarget ? resumeTarget.totalEvents : 0;
+    let knownTranslatableCount = resumeTarget ? resumeTarget.translatableCount : 0;
+    const initialSavedCount = Object.keys(accumulatedLines).length;
+
+    const initialPercent =
+      resumeTarget && knownTranslatableCount > 0
+        ? Math.max(5, Math.min(86, Math.round((initialSavedCount / knownTranslatableCount) * 82)))
+        : 5;
 
     setStatus('translating');
-    setStatusMessage('Reading and preparing subtitle dialogue events...');
-    setProgressPercent(5);
-    setPreviewItems([]);
+    setStatusMessage(
+      initialSavedCount > 0
+        ? `Resuming from checkpoint (${initialSavedCount}/${knownTranslatableCount || '?'} lines saved)...`
+        : 'Reading and preparing subtitle dialogue events...'
+    );
+    setProgressPercent(initialPercent);
+    setPreviewItems(accumulatedPreview);
     setErrorMessage('');
+    if (knownTranslatableCount > 0) {
+      setStats({ totalEvents: knownTotalEvents, translatableCount: knownTranslatableCount });
+    }
+
+    const persistCurrentCheckpoint = (): TranslationCheckpoint | null => {
+      if (Object.keys(accumulatedLines).length === 0) return null;
+      const cp: TranslationCheckpoint = {
+        version: 1,
+        signature: fileSignature,
+        fileName: targetFile.name,
+        fileSize: targetFile.size,
+        fileContent: targetFile.content,
+        sourceLanguage: targetSourceLang,
+        modelChoice: targetModelChoice,
+        totalEvents: knownTotalEvents,
+        translatableCount: knownTranslatableCount,
+        translatedLines: { ...accumulatedLines },
+        previewItems: accumulatedPreview,
+        updatedAt: Date.now(),
+      };
+      saveCheckpoint(cp);
+      setSavedCheckpoint(cp);
+      return cp;
+    };
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -136,10 +273,11 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          fileContent: file.content,
-          fileName: file.name,
-          sourceLanguage,
-          modelChoice,
+          fileContent: targetFile.content,
+          fileName: targetFile.name,
+          sourceLanguage: targetSourceLang,
+          modelChoice: targetModelChoice,
+          preTranslatedLines: initialSavedCount > 0 ? accumulatedLines : undefined,
         }),
         signal: controller.signal,
       });
@@ -181,14 +319,22 @@ export default function App() {
             if (!eventData) continue;
 
             if (eventData.type === 'init') {
+              knownTotalEvents = eventData.totalEvents;
+              knownTranslatableCount = eventData.translatableCount;
               setStats({
                 totalEvents: eventData.totalEvents,
                 translatableCount: eventData.translatableCount,
               });
-              setStatusMessage(`Initialized: ${eventData.translatableCount} dialogue lines identified.`);
+              if (eventData.resumedCount > 0) {
+                setStatusMessage(
+                  `Resumed ${eventData.resumedCount}/${eventData.translatableCount} lines from saved checkpoint.`
+                );
+              } else {
+                setStatusMessage(`Initialized: ${eventData.translatableCount} dialogue lines identified.`);
+              }
             } else if (eventData.type === 'status') {
               setStatusMessage(eventData.statusMessage);
-              if (eventData.batchIndex && eventData.totalBatches) {
+              if (typeof eventData.batchIndex === 'number' && eventData.totalBatches > 0) {
                 setCurrentBatchInfo({ current: eventData.batchIndex, total: eventData.totalBatches });
               }
               if (typeof eventData.percent === 'number') {
@@ -196,11 +342,14 @@ export default function App() {
               }
             } else if (eventData.type === 'batch_complete') {
               if (eventData.preview && Array.isArray(eventData.preview)) {
-                setPreviewItems((prev) => {
-                  const combined = [...prev, ...eventData!.preview];
-                  combined.sort((a, b) => a.index - b.index);
-                  return combined;
-                });
+                accumulatedPreview = mergeCheckpointPreviewItems(accumulatedPreview, eventData.preview);
+                for (const item of eventData.preview as PreviewItem[]) {
+                  if (typeof item.index === 'number' && typeof item.translated === 'string') {
+                    accumulatedLines[String(item.index)] = item.translated;
+                  }
+                }
+                setPreviewItems(accumulatedPreview);
+                persistCurrentCheckpoint();
               }
               if (eventData.completedBatches && eventData.totalBatches) {
                 setCurrentBatchInfo({ current: eventData.completedBatches, total: eventData.totalBatches });
@@ -209,10 +358,12 @@ export default function App() {
                 setProgressPercent((prev) => Math.max(prev, eventData!.percent));
               }
               setStatusMessage(
-                `Completed ${eventData.processedCount}/${eventData.totalCount} lines (${eventData.completedBatches}/${eventData.totalBatches} batches).`
+                `Completed ${eventData.processedCount}/${eventData.totalCount} lines (Checkpoint auto-saved).`
               );
             } else if (eventData.type === 'complete') {
               didComplete = true;
+              clearCheckpoint(fileSignature);
+              setSavedCheckpoint(findLatestCheckpoint());
               if (Array.isArray(eventData.finalPreview)) {
                 setPreviewItems(eventData.finalPreview);
               }
@@ -229,15 +380,27 @@ export default function App() {
       }
 
       if (!didComplete) {
-        throw new Error('Translation stream closed unexpectedly before completion. Please try again.');
+        throw new Error('Connection dropped before translation finished. Your progress was auto-saved — click Resume to continue.');
       }
     } catch (err: unknown) {
+      const savedCp = persistCurrentCheckpoint();
+      const savedCount = getCheckpointTranslatedCount(savedCp);
+
       if ((err as Error)?.name === 'AbortError') {
         setStatus('idle');
-        setStatusMessage('Translation cancelled.');
+        setStatusMessage(
+          savedCount > 0
+            ? `Translation paused. ${savedCount}/${knownTranslatableCount || '?'} lines saved to checkpoint.`
+            : 'Translation cancelled.'
+        );
       } else {
         setStatus('error');
-        setErrorMessage(err instanceof Error ? err.message : 'Unknown translation failure.');
+        const baseErr = err instanceof Error ? err.message : 'Unknown translation failure.';
+        setErrorMessage(
+          savedCount > 0
+            ? `${baseErr} (Auto-saved ${savedCount}/${knownTranslatableCount || '?'} lines to checkpoint — click Resume to continue from where it stopped.)`
+            : baseErr
+        );
       }
     }
   };
@@ -246,7 +409,7 @@ export default function App() {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       setStatus('idle');
-      setStatusMessage('Translation stopped.');
+      setStatusMessage('Translation paused.');
     }
   };
 
@@ -267,6 +430,16 @@ export default function App() {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  };
+
+  const formatRelativeTime = (timestamp: number) => {
+    const diffSec = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+    if (diffSec < 60) return 'just now';
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    return `${Math.floor(diffHr / 24)}d ago`;
   };
 
   return (
@@ -310,6 +483,72 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-8 space-y-8">
+        {/* Auto-Saved Checkpoint Recovery Banner */}
+        {savedCheckpoint && status !== 'translating' && status !== 'completed' && (() => {
+          const savedCount = getCheckpointTranslatedCount(savedCheckpoint);
+          const totalCount = Math.max(savedCheckpoint.translatableCount || savedCount, savedCount);
+          const pct = totalCount > 0 ? Math.min(100, Math.round((savedCount / totalCount) * 100)) : 0;
+          const remainingCount = Math.max(0, totalCount - savedCount);
+          return (
+            <section
+              aria-label="Saved translation checkpoint"
+              className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-indigo-950/70 via-slate-900/90 to-emerald-950/40 border border-indigo-500/40 shadow-lg shadow-indigo-950/30 space-y-3"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 flex items-center justify-center shrink-0">
+                    <HardDrive className="w-5 h-5" />
+                  </div>
+                  <div className="space-y-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-sm font-bold text-white">Saved Checkpoint Ready to Resume</h2>
+                      <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                        {savedCount} / {totalCount} lines ({pct}%)
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        Saved {formatRelativeTime(savedCheckpoint.updatedAt)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-300 truncate">
+                      File: <span className="font-mono text-indigo-200">{savedCheckpoint.fileName}</span>
+                      {remainingCount > 0
+                        ? ` • ${remainingCount} line${remainingCount === 1 ? '' : 's'} left to translate`
+                        : ' • All lines translated, ready for final ASS build'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => startTranslation({ resumeFrom: savedCheckpoint })}
+                    className="px-4 py-2.5 rounded-xl font-semibold text-xs text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 transition shadow-md shadow-emerald-600/25 flex items-center gap-1.5"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    Resume Translation
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDiscardCheckpoint(savedCheckpoint)}
+                    aria-label={`Discard checkpoint for ${savedCheckpoint.fileName}`}
+                    className="px-3 py-2.5 rounded-xl font-medium text-xs text-slate-300 bg-slate-800/80 hover:bg-slate-700 hover:text-white border border-slate-700 transition flex items-center gap-1.5"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Discard
+                  </button>
+                </div>
+              </div>
+
+              <div className="w-full h-1.5 bg-slate-800/90 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-indigo-500 to-emerald-400 rounded-full transition-all duration-300"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </section>
+          );
+        })()}
+
         {/* Upload Zone & Config Grid */}
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* File Upload Box (Spans 2 columns) */}
@@ -492,13 +731,17 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-1.5 text-slate-400">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span><strong>Auto-Save Checkpoint:</strong> Resume anytime after drops/errors</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-slate-400">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                   <span>Zero timestamp modification (Timecode Safe)</span>
                 </div>
               </div>
             </div>
 
-            {/* Translate Button */}
-            <div>
+            {/* Translate / Resume Buttons */}
+            <div className="space-y-2">
               {status === 'translating' ? (
                 <button
                   type="button"
@@ -506,12 +749,31 @@ export default function App() {
                   className="w-full py-3 px-4 rounded-xl font-semibold text-xs text-rose-300 bg-rose-950/60 hover:bg-rose-900/60 border border-rose-800/50 transition flex items-center justify-center gap-2"
                 >
                   <RefreshCw className="w-4 h-4 animate-spin text-rose-400" />
-                  Stop / Cancel Translation
+                  Pause &amp; Save Checkpoint
                 </button>
+              ) : matchingCheckpoint ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => startTranslation({ resumeFrom: matchingCheckpoint })}
+                    className="w-full py-3 px-4 rounded-xl font-semibold text-sm transition flex items-center justify-center gap-2 shadow-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-600/25 active:scale-[0.99]"
+                  >
+                    <Play className="w-4 h-4 fill-current" />
+                    Resume ({getCheckpointTranslatedCount(matchingCheckpoint)}/{matchingCheckpoint.translatableCount} done)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => startTranslation({ forceRestart: true })}
+                    className="w-full py-2 px-3 rounded-xl font-medium text-xs text-slate-300 bg-slate-800/70 hover:bg-slate-800 hover:text-white border border-slate-700/80 transition flex items-center justify-center gap-1.5"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Start Over from 0%
+                  </button>
+                </>
               ) : (
                 <button
                   type="button"
-                  onClick={startTranslation}
+                  onClick={() => startTranslation()}
                   disabled={!file}
                   className={`w-full py-3 px-4 rounded-xl font-semibold text-sm transition flex items-center justify-center gap-2 shadow-lg ${
                     file
@@ -529,12 +791,24 @@ export default function App() {
 
         {/* Error Alert */}
         {errorMessage && (
-          <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-800/60 text-rose-200 text-xs flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
-            <div className="space-y-1">
-              <div className="font-semibold text-rose-300">Translation Notice</div>
-              <div>{errorMessage}</div>
+          <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-800/60 text-rose-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <div className="font-semibold text-rose-300">Translation Notice</div>
+                <div>{errorMessage}</div>
+              </div>
             </div>
+            {matchingCheckpoint && status !== 'translating' && (
+              <button
+                type="button"
+                onClick={() => startTranslation({ resumeFrom: matchingCheckpoint })}
+                className="px-3.5 py-2 rounded-lg font-semibold text-xs text-white bg-emerald-600 hover:bg-emerald-500 transition flex items-center justify-center gap-1.5 shrink-0"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                Resume Now
+              </button>
+            )}
           </div>
         )}
 

@@ -683,11 +683,12 @@ export function hasSignOrTextActor(actor?: string): boolean {
  * - Actor containing "Sign" or "Text" -> Sign_Basic
  * - Default, BD DX, Main, Q0, Font1_OutlineShadow -> Myanmar1
  * - Top, On Top, Default - Top, DefaultTop, Bubble Song, Q7, Q1 -> TopMyanmr
- * - overlap, italicstop -> TopMyanmar2
- * - Italics, Main - Italics, DefaultItalics, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6 -> Myanmar2
+ * - overlap, italicstop, Top Italics -> TopMyanmar2
+ * - Italics, Main - Italics, DefaultItalics, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6, s7 -> Myanmar2
  * - Flashback -> Myanmar3
  * - Flashback Italics -> Myanmar31
  * - Sign_*, Signs, Layer1_Font1, Q9, Q8, Q3, Q4, Q5 -> Sign_Basic
+ * - Narrator -> Narration
  */
 export function mapStyleName(originalStyle: string, actor?: string): string {
   if (hasSignOrTextActor(actor)) {
@@ -739,8 +740,19 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     return 'Myanmar2';
   }
 
-  // overlap, italicstop -> TopMyanmar2
-  if (lower === 'overlap' || lower === 'italicstop') {
+  // Narrator -> Narration
+  if (lower === 'narrator') {
+    return 'Narration';
+  }
+
+  // overlap, italicstop, Top Italics -> TopMyanmar2
+  if (
+    lower === 'overlap' ||
+    lower === 'italicstop' ||
+    lower === 'top italics' ||
+    lower === 'top italic' ||
+    lower === 'top_italics'
+  ) {
     return 'TopMyanmar2';
   }
 
@@ -778,7 +790,7 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
  * User's exact custom Aegisub [V4+ Styles] library to inject into output ASS files
  */
 export const BURMESE_STYLES = [
-  'Style: Narration,Myanmar Text,30,&H00FFFFFF,&H000000FF,&H00000050,&H00000050,0,-1,0,0,100,100,0,0,1,1,1,2,10,10,10,1',
+  'Style: Narration,Myanmar Text,35,&H00FFFFFF,&H000000FF,&H00000050,&H00000050,-1,-1,0,0,100,100,0,0,1,1,1,2,10,10,10,1',
   'Style: sign_generic,Arial,20,&H00000000,&H000000FF,&H00FFFFFF,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1',
   'Style: into,Small Fonts,20,&H00FFFFFF,&H002BFD10,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
   'Style: into2,Bell MT,20,&H00C82B28,&H000000FF,&H00F8F8F9,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
@@ -787,7 +799,7 @@ export const BURMESE_STYLES = [
   'Style: Default111,Myanmar Cherry Pro,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
   'Style: 13,Agency FB,10,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,0,0,9,0,0,0,1',
   'Style: Myanmar2,Myanmar Text,35,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,-1,0,0,100,100,0,0,1,1,1,2,10,10,10,1',
-  'Style: TopMyanmar2,Myanmar Text,30,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,-1,0,0,100,100,0,0,1,1,1,2,10,10,310,1',
+  'Style: TopMyanmar2,Myanmar Text,35,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,-1,0,0,100,100,0,0,1,1,1,2,10,10,310,1',
   'Style: TopMyanmar,Myanmar Text,30,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,1,1,2,10,10,310,1',
   'Style: SignsMyanmr,Myanmar BoKaow,30,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,1,2,10,10,10,1',
   'Style: Myanmar31,Myanmar Text,35,&H00FFFFFF,&H000000FF,&H00613618,&H00613618,-1,-1,0,0,100,100,0,0,1,1,1,2,10,10,10,1',

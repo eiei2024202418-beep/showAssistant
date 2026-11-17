@@ -159,6 +159,8 @@ test('mapStyleName correctly applies user style mapping rules', () => {
 
   assert.equal(mapStyleName('overlap'), 'TopMyanmar2');
   assert.equal(mapStyleName('italicstop'), 'TopMyanmar2');
+  assert.equal(mapStyleName('Top Italics'), 'TopMyanmar2');
+  assert.equal(mapStyleName('Narrator'), 'Narration');
 
   assert.equal(mapStyleName('Italics'), 'Myanmar2');
   assert.equal(mapStyleName('Main - Italics'), 'Myanmar2');
@@ -369,12 +371,12 @@ Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,Hello
   // Prefix-sensitive styles must all exist independently (Default1 must NOT be skipped due to Default111)
   assert.ok(out.includes('Style: Default1,Avatar Airbender,48,'));
   assert.ok(out.includes('Style: Myanmar1,Myanmar Text,35,'));
-  assert.ok(out.includes('Style: TopMyanmar2,Myanmar Text,30,'));
+  assert.ok(out.includes('Style: TopMyanmar2,Myanmar Text,35,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,-1,0,0,100,100,0,0,1,1,1,2,10,10,310,1'));
   assert.ok(out.includes('Style: TopMyanmar,Myanmar Text,30,'));
   assert.ok(out.includes('Style: TopMyanmr,Myanmar Text,35,'));
   assert.ok(out.includes('Style: Myanmar3,Myanmar Text,35,'));
   assert.ok(out.includes('Style: Myanmar31,Myanmar Text,35,'));
-  assert.ok(out.includes('Style: Narration,Myanmar Text,30,'));
+  assert.ok(out.includes('Style: Narration,Myanmar Text,35,&H00FFFFFF,&H000000FF,&H00000050,&H00000050,-1,-1,0,0,100,100,0,0,1,1,1,2,10,10,10,1'));
   assert.ok(out.includes('Style: CreditStyle,Myanmar AyarTyepwriter,15,'));
   // Existing styles in input should not be duplicated
   assert.equal((out.match(/^Style: Default111,/gm) || []).length, 1);

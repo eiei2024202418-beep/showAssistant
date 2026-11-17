@@ -46,12 +46,13 @@ Jp စာတန်းထိုးတွေအတွက်သီးသန့် -
 
 1. Style Mapping - Style နာမည်တွေကို ဒီအတိုင်း ပြောင်းပေးပါ:
 Default, BD DX, Main, Q0, Font1_OutlineShadow -> Myanmar1
-Top, On Top, Default - Top, DefaultTop, Bubble Song, Q7, Q1  -> TopMyanmr
-overlap, italicstop -> TopMyanmar2
-Italics, Main - Italics, DefaultItalics, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6, s7  -> Myanmar2
+Top, On Top, Bubble Song, Q7, Q1  -> TopMyanmr
+overlap, italicstop, Top Italics -> TopMyanmar2
+Italics, Main - Italics, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6, s7 -> Myanmar2
 Flashback -> Myanmar3
 Flashback Italics -> Myanmar31
-Sign_*, Signs, Layer1_Font1, Q9, Q8, Q3, Q4, Q5 -> Sign_Basic
+Sign_*, Signs, Q9, Q8, Q3, Q4, Q5, Layer1_Font1 -> Sign_Basic
+Narrator -> Narration
 
 2. Error-Free & 100% မြန်မာယူနီကုဒ်သာ
 စာလုံးပေါင်း၊ သတ်ပုံအမှား လုံးဝမရှိစေရ။

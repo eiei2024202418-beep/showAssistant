@@ -9,6 +9,10 @@ import {
 } from './src/utils/safetyStepDown.js';
 import { executeBatchWithAutoSplit } from './src/utils/batchResilience.js';
 import {
+  sanitizePreTranslatedMap,
+  filterRemainingTranslatableEvents,
+} from './src/utils/checkpoint.js';
+import {
   parseAss,
   parseSrt,
   buildAss,
@@ -750,6 +754,7 @@ app.post('/api/translate/stream', async (req, res) => {
     fileName = 'subtitle.ass',
     sourceLanguage = 'auto',
     modelChoice = 'gemini-3.8-flash',
+    preTranslatedLines,
   } = req.body;
 
   if (!fileContent || typeof fileContent !== 'string') {
@@ -799,10 +804,18 @@ app.post('/api/translate/stream', async (req, res) => {
 
     const translatableEvents = parsedData.events.filter((e) => e.isTranslatable);
 
+    const validTranslatableIndices = new Set(translatableEvents.map((e) => e.index));
+    const translatedMap = sanitizePreTranslatedMap(preTranslatedLines, validTranslatableIndices);
+    const { alreadyTranslatedCount, remainingEvents } = filterRemainingTranslatableEvents(
+      translatableEvents,
+      translatedMap
+    );
+
     sendEvent({
       type: 'init',
       totalEvents: parsedData.events.length,
       translatableCount: translatableEvents.length,
+      resumedCount: alreadyTranslatedCount,
       format: parsedData.format,
       fileName,
     });
@@ -828,17 +841,17 @@ app.post('/api/translate/stream', async (req, res) => {
     // Detect nearby duplicate lines (consecutive like 1,2,3 or 1-line gap like 1 & 3)
     const nearbyDuplicateClusters = findNearbyDuplicateClusters(parsedData.events, 2);
 
-    // Process in balanced batches (~28 lines) to slash Free Tier RPD/RPM quota usage by >55% (~16 calls/episode)
+    // Process remaining untranslated events in balanced batches (~28 lines) to slash Free Tier RPD/RPM quota usage
     // while never splitting a nearby duplicate cluster across batch edges when avoidable
     const BATCH_SIZE = 28;
     const batches: BatchItemInput[][] = [];
     let cursor = 0;
-    while (cursor < translatableEvents.length) {
-      let end = Math.min(cursor + BATCH_SIZE, translatableEvents.length);
+    while (cursor < remainingEvents.length) {
+      let end = Math.min(cursor + BATCH_SIZE, remainingEvents.length);
       let extra = 0;
-      while (end < translatableEvents.length && extra < 6) {
-        const prevCluster = nearbyDuplicateClusters.get(translatableEvents[end - 1].index);
-        const nextCluster = nearbyDuplicateClusters.get(translatableEvents[end].index);
+      while (end < remainingEvents.length && extra < 6) {
+        const prevCluster = nearbyDuplicateClusters.get(remainingEvents[end - 1].index);
+        const nextCluster = nearbyDuplicateClusters.get(remainingEvents[end].index);
         if (prevCluster && nextCluster && prevCluster.clusterId === nextCluster.clusterId) {
           end++;
           extra++;
@@ -847,7 +860,7 @@ app.post('/api/translate/stream', async (req, res) => {
         }
       }
 
-      const slice = translatableEvents.slice(cursor, end);
+      const slice = remainingEvents.slice(cursor, end);
       batches.push(
         slice.map((e) => {
           const duration = getEventDuration(e.start, e.end);
@@ -870,18 +883,34 @@ app.post('/api/translate/stream', async (req, res) => {
       cursor = end;
     }
 
-    sendEvent({
-      type: 'status',
-      batchIndex: 0,
-      totalBatches: batches.length,
-      statusMessage: `Starting focused line-by-line translation for ${translatableEvents.length} events (${batches.length} micro-batches, Target CPS < 10)...`,
-      percent: 5,
-    });
-
-    const translatedMap = new Map<number, string>();
     const rateLimiter = new ModelRateLimiter();
     let completedBatchesCount = 0;
-    let completedLinesCount = 0;
+    let completedLinesCount = alreadyTranslatedCount;
+    const startPercent = Math.max(
+      5,
+      Math.min(86, Math.round((completedLinesCount / translatableEvents.length) * 82))
+    );
+
+    if (batches.length > 0) {
+      sendEvent({
+        type: 'status',
+        batchIndex: 0,
+        totalBatches: batches.length,
+        statusMessage:
+          alreadyTranslatedCount > 0
+            ? `Resuming from checkpoint: ${alreadyTranslatedCount}/${translatableEvents.length} lines restored. Translating remaining ${remainingEvents.length} lines (${batches.length} micro-batches)...`
+            : `Starting focused line-by-line translation for ${translatableEvents.length} events (${batches.length} micro-batches, Target CPS < 10)...`,
+        percent: startPercent,
+      });
+    } else {
+      sendEvent({
+        type: 'status',
+        batchIndex: 0,
+        totalBatches: 0,
+        statusMessage: `Resuming from checkpoint: all ${alreadyTranslatedCount}/${translatableEvents.length} lines restored. Running final verification & ASS build...`,
+        percent: 87,
+      });
+    }
 
     // Parallel Worker Pool: Concurrency of 2 prevents Free-Tier RPM/503 bursts while keeping smooth throughput
     const CONCURRENCY = Math.min(2, batches.length);
