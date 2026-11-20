@@ -3,6 +3,10 @@
  */
 
 import { reconcileTags, stripLineBreaksForDialogue } from './tagProtector';
+import {
+  applySignTypesettingMode,
+  type SignTypesettingOptions,
+} from './signTypesetting';
 
 export const STANDARD_ASS_TOP_HEADER: readonly string[] = [
   '[Script Info]',
@@ -54,11 +58,11 @@ export interface ParsedAssData {
  * Drawing commands in ASS are wrapped between {\p1} and {\p0} with coordinate commands (m, l, b, s, p, c).
  */
 export function isPureDrawing(text: string): boolean {
-  if (!text.includes('{\\p')) return false;
+  if (!/\{[^}]*\\p[1-9]\d*(?![a-zA-Z])/.test(text)) return false;
   // If the text has only drawing tags and drawing coordinates
   const stripped = text.replace(/\{[^}]*\}/g, '').trim();
   // Drawing coordinates are typically numbers and vector command letters: m, l, b, s, p, c
-  return /^[0-9\smlbspc-]+$/i.test(stripped);
+  return stripped.length > 0 && /^[0-9\smlbspc.-]+$/i.test(stripped);
 }
 
 /**
@@ -379,16 +383,7 @@ export function isSignOrTitle(actor: string, style: string, text: string): boole
   // \clip, \iclip = Sign masking
   // \p1 ... \p0 = Vector drawing box for signs
   if (
-    rawText.includes('{\\pos(') ||
-    rawText.includes('{\\pos (') ||
-    rawText.includes('{\\move(') ||
-    rawText.includes('{\\frz') ||
-    rawText.includes('{\\frx') ||
-    rawText.includes('{\\fry') ||
-    rawText.includes('{\\clip(') ||
-    rawText.includes('{\\iclip(') ||
-    rawText.includes('{\\p1}') ||
-    rawText.includes('{\\p2}')
+    /\{[^}]*\\(?:pos\s*\(|move\s*\(|frz|frx|fry|i?clip\s*\(|p[1-9]\d*(?![a-zA-Z]))/.test(rawText)
   ) {
     return true;
   }
@@ -698,6 +693,11 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
   const s = originalStyle.trim();
   const lower = s.toLowerCase();
 
+  // Preserve explicit Sign_Box (BorderStyle=3 opaque box for overlapping disclaimers)
+  if (lower === 'sign_box') {
+    return 'Sign_Box';
+  }
+
   // Sign_*, Signs, Layer1_Font1, Q9, Q8, Q3, Q4, Q5 -> Sign_Basic
   if (
     lower.startsWith('sign_') ||
@@ -812,6 +812,7 @@ export const BURMESE_STYLES = [
   'Style: Default111 - Copy - Copy - Copy - Copy - Copy,Myanmar Cherry Pro,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
   'Style: pow 1,Myanmar Cherry Pro,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
   'Style: Sign_Basic,Myanmar Text,30,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,1,8,10,10,18,1',
+  'Style: Sign_Box,Myanmar Text,14,&H00FFFFFF,&H000000FF,&H40000000,&H40000000,0,0,0,0,100,100,0,0,3,3,0,8,14,14,14,1',
   'Style: TopMyanmar3,Myanmar Text,30,&H00FFFFFF,&H000000FF,&H00613618,&H00613618,-1,0,0,0,100,100,0,0,1,1,1,2,10,10,310,1',
   'Style: TopMyanmr,Myanmar Text,35,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,1,1,8,10,10,10,1',
   'Style: TopMyanmar32,Myanmar Text,30,&H00FFFFFF,&H000000FF,&H00613618,&H00613618,-1,-1,0,0,100,100,0,0,1,1,1,2,10,10,310,1',
@@ -1210,7 +1211,8 @@ export function buildAss(
   parsedData: ParsedAssData,
   translatedEvents?: AssEvent[],
   applyStyleMapping = true,
-  prependedEvents: AssEvent[] = []
+  prependedEvents: AssEvent[] = [],
+  signTypesetting?: SignTypesettingOptions
 ): string {
   const sourceEvents = translatedEvents || parsedData.events;
   const lines: string[] = [];
@@ -1218,8 +1220,32 @@ export function buildAss(
   let header = [...parsedData.headerSection];
   let scaleX = 1;
   let scaleY = 1;
+  const sourceStyleAlignments: Record<string, number> = {};
 
   if (applyStyleMapping) {
+    // Capture source style alignments BEFORE canonical style mapping overwrites them
+    let rawStyleFields = [
+      'Name', 'Fontname', 'Fontsize', 'PrimaryColour', 'SecondaryColour', 'OutlineColour', 'BackColour',
+      'Bold', 'Italic', 'Underline', 'StrikeOut', 'ScaleX', 'ScaleY', 'Spacing', 'Angle',
+      'BorderStyle', 'Outline', 'Shadow', 'Alignment', 'MarginL', 'MarginR', 'MarginV', 'Encoding',
+    ];
+    for (const hLine of header) {
+      const tr = hLine.trim();
+      if (/^\[events\]/i.test(tr)) break;
+      if (/^Format\s*:/i.test(tr)) {
+        rawStyleFields = tr.slice(tr.indexOf(':') + 1).split(',').map((f) => f.trim());
+      } else if (/^Style\s*:/i.test(tr)) {
+        const parts = tr.slice(tr.indexOf(':') + 1).trim().split(',');
+        const nameIdx = rawStyleFields.findIndex((f) => f.toLowerCase() === 'name');
+        const alignIdx = rawStyleFields.findIndex((f) => f.toLowerCase() === 'alignment');
+        const sName = (nameIdx !== -1 ? parts[nameIdx] : parts[0] || '').trim().toLowerCase();
+        const alignVal = parseInt(alignIdx !== -1 ? parts[alignIdx] : '', 10);
+        if (sName && alignVal >= 1 && alignVal <= 9) {
+          sourceStyleAlignments[sName] = alignVal;
+        }
+      }
+    }
+
     const { playResX: srcPlayResX, playResY: srcPlayResY } = extractSourcePlayRes(header);
     scaleX = TARGET_PLAY_RES_X / srcPlayResX;
     scaleY = TARGET_PLAY_RES_Y / srcPlayResY;
@@ -1297,29 +1323,65 @@ export function buildAss(
   lines.push(...header);
 
   // 4. Events lines (prepended watermark events are already 640x360; source events scale cleanly)
+  const isSignFlags = sourceEvents.map((event, idx) => {
+    const originalEv = parsedData.events[idx];
+    return isSignOrTitle(
+      event.name,
+      event.style,
+      originalEv ? originalEv.text : event.text
+    );
+  });
+
   const normalizedSourceEvents = applyStyleMapping
-    ? sourceEvents.map((event) => {
-        const isSign = isSignOrTitle(event.name, event.style, event.text);
+    ? sourceEvents.map((event, idx) => {
+        const isSign = isSignFlags[idx];
         let normalizedText = normalizeEventTextForTargetPlayRes(event.text, scaleX, scaleY, isSign);
         if (event.type === 'Dialogue' && !isSign) {
           normalizedText = stripLineBreaksForDialogue(normalizedText);
         }
         return {
           ...event,
+          style: mapStyleName(event.style, event.name),
           text: normalizedText,
         };
       })
     : sourceEvents;
 
-  const eventsToUse = [...prependedEvents, ...normalizedSourceEvents];
+  // Map original style alignment keys onto mapped style names only if mapped wasn't already defined
+  const mergedStyleAlignments: Record<string, number> = { ...sourceStyleAlignments };
+  for (const event of sourceEvents) {
+    const origKey = (event.style || '').trim().toLowerCase();
+    const mappedKey = mapStyleName(event.style, event.name).trim().toLowerCase();
+    if (sourceStyleAlignments[origKey] && !mergedStyleAlignments[mappedKey]) {
+      mergedStyleAlignments[mappedKey] = sourceStyleAlignments[origKey];
+    }
+  }
+
+  const postProcessedSourceEvents =
+    applyStyleMapping && signTypesetting
+      ? applySignTypesettingMode(normalizedSourceEvents, isSignFlags, {
+          ...signTypesetting,
+          playResX: TARGET_PLAY_RES_X,
+          playResY: TARGET_PLAY_RES_Y,
+          styleAlignments: mergedStyleAlignments,
+        })
+      : normalizedSourceEvents;
+
+  const mappedPrependedEvents = applyStyleMapping
+    ? prependedEvents.map((ev) => ({
+        ...ev,
+        style: mapStyleName(ev.style, ev.name),
+      }))
+    : prependedEvents;
+
+  const eventsToUse = [...mappedPrependedEvents, ...postProcessedSourceEvents];
 
   for (const event of eventsToUse) {
-    const finalStyle = applyStyleMapping ? mapStyleName(event.style, event.name) : event.style;
     const fields = [
       event.layer,
       event.start,
       event.end,
-      finalStyle,
+      event.style,
       event.name,
       event.marginL,
       event.marginR,
@@ -1384,7 +1446,10 @@ export function validateAss(
       }
 
       const expectedMapped = mapStyleName(orig.style, orig.name);
-      if (trans.style !== orig.style && trans.style !== expectedMapped) {
+      const isSignEvent = isSignOrTitle(orig.name, orig.style, orig.text);
+      const isAllowedSignOverride =
+        isSignEvent && (trans.style === 'Sign_Box' || trans.style === 'Sign_Basic');
+      if (trans.style !== orig.style && trans.style !== expectedMapped && !isAllowedSignOverride) {
         errors.push(`Style mismatch at event ${i + 1}: expected ${orig.style} or ${expectedMapped}, got ${trans.style}`);
         break;
       }

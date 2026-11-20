@@ -32,6 +32,12 @@ import {
 } from './src/utils/subtitleParser.js';
 import { reconcileTags, removeTrailingPeriods } from './src/utils/tagProtector.js';
 import { ModelRateLimiter } from './src/utils/rateLimiter.js';
+import {
+  prepareSignTextForTranslation,
+  extractLeadingTagBlock,
+  type SignTypesettingMode,
+  type DenseSignStrategy,
+} from './src/utils/signTypesetting.js';
 
 import { EXACT_USER_PROMPT } from './src/utils/userPrompt.js';
 
@@ -73,6 +79,7 @@ export interface BatchItemInput {
   maxChars?: number;
   duplicateGroupId?: string;
   allowHighCps?: boolean;
+  lineBreakCount?: number;
   text: string;
 }
 
@@ -349,7 +356,7 @@ YOUR TASK:
 Translate EACH line cleanly and accurately into natural spoken Burmese following the exact system prompt rules:
 1. NEVER copy or leave source Japanese/Kanji/Kana or foreign scripts (Thai, Lao, Korean, Indic, Cyrillic) in "translated" — even if the source line has ASS tags like {\\i1} or quotation marks like "部長"!
 2. Output ONLY pure Burmese Unicode (မြန်မာစာ) plus ASCII/Romaji character names where natural.
-3. Preserve all ASS tags {\\...} from "originalText". If "isDialogue" is true, output a SINGLE line without \\N line breaks; if "isDialogue" is false (Signs/Text/Title/Lyrics), preserve \\N line breaks intact. Never output timecodes or trailing periods (.).
+3. Preserve all ASS tags {\\...} from "originalText". If "isDialogue" is true, output a SINGLE line without \\N line breaks; if "isDialogue" is false (Signs/RPG UI/Text/Title/Lyrics), translate ALL descriptive labels/stats/disclaimers into concise Burmese (never leave English/Japanese descriptive phrases untranslated, only standard short game abbreviations like HP/MP/LV or proper names) and preserve \\N line breaks intact. Never output timecodes or trailing periods (.).
 4. If "isDialogue" is true and "maxChars" is provided, keep Aegisub visible char count <= maxChars (CPS < 10).
 5. Only return "" if "originalText" is purely a parenthetical SFX/groan note like （ため息）.
 
@@ -484,8 +491,10 @@ async function translateBatchWithRetry(
    - ⚠️ အရေးကြီး: Aegisub သည် မြန်မာစာတွင် သရ/အသတ်/ဝစ္စပေါက် (ေ, ာ, ါ, း) များကိုပါ စာလုံးတစ်လုံးစီ ရေတွက်သောကြောင့် မြန်မာတစ်သံလျှင် ~2 chars ခန့် ရှိသည် (ဥပမာ: "သုံးနေတာလား" = 8 chars)။ ထို့ကြောင့် "maxChars" အောက် ဝင်စေရန် အတိုဆုံး စကားပြောကိုသာ ရွေးပါ။
    - duration တိုသော (<1.5s) စာကြောင်းများတွင် အင်္ဂလိပ် Skill/Item နာမည်ရှည်ကြီးများက maxChars ကို ကျော်နေပါက အတိုချုံး/မြန်မာလို အတိုပြန်၍ maxChars အောက် ဝင်အောင် ရေးပါ။
    - ဇာတ်ကောင်ပြောသော Spoken Dialogue (isDialogue: true) များတွင် \\N (line break) များ မထည့်ဘဲ တစ်ကြောင်းတည်း (single line) အဖြစ်သာ ပြန်ပေးပါ။
-၂။ On-screen Signs / Text / Title / Lyrics များ (isDialogue: false):
-   - Actor သို့မဟုတ် Style သည် SIGN, TEXT, TITLE, LYRICS, NOTE ဖြစ်ပါက CPS ကန့်သတ်ချက် မလိုအပ်ပါ။ မူရင်းအတိုင်း တိကျစွာ ပြန်ပြီး မူရင်း \\N line break များကို ဆက်လက် ထိန်းသိမ်းပေးပါ။
+၂။ On-screen Signs / RPG UI / Text / Title / Lyrics များ (isDialogue: false):
+   - Actor သို့မဟုတ် Style သည် SIGN, TEXT, TITLE, LYRICS, NOTE ဖြစ်ပါက CPS ကန့်သတ်ချက် မလိုအပ်ပါ။
+   - RPG Status Box / Stats / Skill / Equipment / Disclaimer များတွင် ပါဝင်သော အင်္ဂလိပ် သို့မဟုတ် ဂျပန် စာသား/ခေါင်းစဉ်/အချက်အလက်အားလုံးကို ဘာသာမပြန်ဘဲ မချန်ထားရ (HP, MP, LV, S-rank ကဲ့သို့ Game အတိုကောက်နှင့် ဇာတ်ကောင်/နာမည်ရင်းများမှလွဲ၍ ကျန်ဖော်ပြချက်အားလုံးကို တိုတိုကျစ်ကျစ် မြန်မာလို အပြည့်အစုံ ပြန်ပေးပါ)။
+   - Box ထဲတွင် သပ်ရပ်စွာ ဝင်ဆံ့စေရန် တိုတိုကျစ်ကျစ် ရေးပြီး မူရင်း \\N line break အရေအတွက်နှင့် နေရာ (lineBreakCount) ကို အတိအကျ ဆက်လက် ထိန်းသိမ်းပေးပါ။
 ၃။ Jp စာတန်းထိုးတွေအတွက်သီးသန့် - () စာသားတွေ နဲ့ ညည်းသံလေသံတွေပါလာရင် ဖျက်ထုတ်ပါ Text ပဲ ဖျက်ပါ လှိုင်းမဖျက်ပါနဲ့:
    - စာကြောင်းတစ်ခုလုံးသည် (...) သို့မဟုတ် ညည်းသံ/အသက်ရှူသံ/လေသံသက်သက်သာဖြစ်ပါက "translated" ကို "" (empty string) အဖြစ် ပြန်ပေးပါ (index ကို လုံးဝ မချန်ထားရ၊ လိုင်းမဖျက်ရ)။
 ၄။ ပူးနေသော သို့မဟုတ် ၁ ကြောင်းခြား စာသားတူလိုင်းများ (duplicateGroupId ပါဝင်သော လိုင်းများ):
@@ -754,8 +763,20 @@ app.post('/api/translate/stream', async (req, res) => {
     fileName = 'subtitle.ass',
     sourceLanguage = 'auto',
     modelChoice = 'gemini-3.8-flash',
+    signMode = 'smart_hybrid',
+    denseSignStrategy = 'merge',
     preTranslatedLines,
   } = req.body;
+
+  const safeSignMode: SignTypesettingMode =
+    signMode === 'clean_top' || signMode === 'preserve_original' || signMode === 'smart_hybrid'
+      ? signMode
+      : 'smart_hybrid';
+
+  const safeDenseSignStrategy: DenseSignStrategy =
+    denseSignStrategy === 'comment' || denseSignStrategy === 'keep' || denseSignStrategy === 'merge'
+      ? denseSignStrategy
+      : 'merge';
 
   if (!fileContent || typeof fileContent !== 'string') {
     res.status(400).json({ error: 'Missing or invalid fileContent' });
@@ -825,7 +846,10 @@ app.post('/api/translate/stream', async (req, res) => {
       const watermarkEvents = hasWatermarkEvents(parsedData.events)
         ? []
         : buildWatermarkEvents(fileName, parsedData.events);
-      const finalAss = buildAss(parsedData, undefined, true, watermarkEvents);
+      const finalAss = buildAss(parsedData, undefined, true, watermarkEvents, {
+        mode: safeSignMode,
+        denseSignStrategy: safeDenseSignStrategy,
+      });
       const outputFileName = fileName.replace(/\.(ass|srt)$/i, '') + '.translated.ass';
       sendEvent({
         type: 'complete',
@@ -867,6 +891,13 @@ app.post('/api/translate/stream', async (req, res) => {
           const isSign = isSignOrTitle(e.name, e.style, e.text);
           const dupCluster = nearbyDuplicateClusters.get(e.index);
           const enforceCps = !isSign && !dupCluster;
+          // Pre-clean fragmented inline tags on Sign lines before sending to Gemini
+          // (keeps \N line breaks intact and prevents broken Burmese word order / lost \N)
+          const textForLlm =
+            isSign && safeSignMode !== 'preserve_original'
+              ? prepareSignTextForTranslation(e.text)
+              : e.text;
+          const lbCount = isSign ? (textForLlm.match(/\\N/g) || []).length : 0;
           return {
             index: e.index,
             actor: e.name || '',
@@ -876,12 +907,25 @@ app.post('/api/translate/stream', async (req, res) => {
             maxChars: enforceCps ? getMaxCharsForCps(duration, 8.8) : undefined,
             duplicateGroupId: dupCluster?.clusterId,
             allowHighCps: dupCluster ? true : undefined,
-            text: e.text,
+            lineBreakCount: lbCount > 0 ? lbCount : undefined,
+            text: textForLlm,
           };
         })
       );
       cursor = end;
     }
+
+    const getReconcileSource = (origText: string, isSign: boolean): string => {
+      if (!isSign || safeSignMode === 'preserve_original') {
+        return origText;
+      }
+      const cleanBody = prepareSignTextForTranslation(origText);
+      if (safeSignMode === 'clean_top') {
+        return cleanBody;
+      }
+      // Smart Hybrid: keep only the clean leading positioning/font tag block, dropping mid-word inline tags
+      return `${extractLeadingTagBlock(origText)}${cleanBody}`;
+    };
 
     const rateLimiter = new ModelRateLimiter();
     let completedBatchesCount = 0;
@@ -977,7 +1021,8 @@ app.post('/api/translate/stream', async (req, res) => {
           for (const item of translatedBatch) {
             const origEvent = parsedData.events[item.index];
             const isSign = isSignOrTitle(origEvent.name, origEvent.style, origEvent.text);
-            let safeTranslated = reconcileTags(origEvent.text, item.translated, { preserveLineBreaks: isSign });
+            const reconcileSource = getReconcileSource(origEvent.text, isSign);
+            let safeTranslated = reconcileTags(reconcileSource, item.translated, { preserveLineBreaks: isSign });
             const duration = getEventDuration(origEvent.start, origEvent.end);
             const isNearbyDup = nearbyDuplicateClusters.has(item.index);
 
@@ -1008,9 +1053,10 @@ app.post('/api/translate/stream', async (req, res) => {
           for (const item of translatedBatch) {
             const origEvent = parsedData.events[item.index];
             const isSign = isSignOrTitle(origEvent.name, origEvent.style, origEvent.text);
+            const reconcileSource = getReconcileSource(origEvent.text, isSign);
             const finalText =
               batchResults.get(item.index) ??
-              reconcileTags(origEvent.text, item.translated, { preserveLineBreaks: isSign });
+              reconcileTags(reconcileSource, item.translated, { preserveLineBreaks: isSign });
             translatedMap.set(item.index, finalText);
 
             const duration = getEventDuration(origEvent.start, origEvent.end);
@@ -1076,7 +1122,10 @@ app.post('/api/translate/stream', async (req, res) => {
         const isNearbyDup = nearbyDuplicateClusters.has(origEvent.index);
         finalInvalidLines.push({
           index: origEvent.index,
-          originalText: origEvent.text,
+          originalText:
+            isSign && safeSignMode !== 'preserve_original'
+              ? prepareSignTextForTranslation(origEvent.text)
+              : origEvent.text,
           badOutput: currentText ?? '',
           reason: check.reason || 'invalid_output',
           forbiddenScripts: check.forbiddenScripts,
@@ -1104,7 +1153,8 @@ app.post('/api/translate/stream', async (req, res) => {
           if (fixed !== undefined) {
             const origEvent = parsedData.events[reqItem.index];
             const isSign = isSignOrTitle(origEvent.name, origEvent.style, origEvent.text);
-            let safeFixed = reconcileTags(origEvent.text, fixed, { preserveLineBreaks: isSign });
+            const reconcileSource = getReconcileSource(origEvent.text, isSign);
+            let safeFixed = reconcileTags(reconcileSource, fixed, { preserveLineBreaks: isSign });
             if (reqItem.isDialogue && reqItem.maxChars) {
               safeFixed = contractBurmeseForCps(safeFixed, reqItem.maxChars);
             }
@@ -1221,8 +1271,11 @@ app.post('/api/translate/stream', async (req, res) => {
       ? []
       : buildWatermarkEvents(fileName, updatedEvents);
 
-    // Build the final ASS content
-    const finalAssContent = buildAss(parsedData, updatedEvents, true, watermarkEvents);
+    // Build the final ASS content with the selected Sign & Typesetting mode
+    const finalAssContent = buildAss(parsedData, updatedEvents, true, watermarkEvents, {
+      mode: safeSignMode,
+      denseSignStrategy: safeDenseSignStrategy,
+    });
 
     console.log('[stream] Validating final ASS content...');
     // Validate the resulting ASS file
@@ -1237,15 +1290,18 @@ app.post('/api/translate/stream', async (req, res) => {
       return;
     }
 
-    // Build synchronized finalPreview for UI SubtitleViewer (reflects global CPS compression & repairs)
+    // Build synchronized finalPreview for UI SubtitleViewer (reflects final styles, Sign_Box, auto-fit wraps & merges)
+    const finalBuiltEvents = parseAss(finalAssContent).events.slice(watermarkEvents.length);
     const finalPreview = translatableEvents.map((origEvent) => {
-      const finalText = translatedMap.get(origEvent.index) ?? origEvent.text;
+      const builtEv = finalBuiltEvents[origEvent.index];
+      const finalText = builtEv ? builtEv.text : (translatedMap.get(origEvent.index) ?? origEvent.text);
+      const finalStyle = builtEv ? builtEv.style : mapStyleName(origEvent.style, origEvent.name);
       const duration = getEventDuration(origEvent.start, origEvent.end);
       const isSign = isSignOrTitle(origEvent.name, origEvent.style, origEvent.text);
       return {
         index: origEvent.index,
         original: origEvent.text,
-        translated: finalText,
+        translated: builtEv?.type === 'Comment' ? `[Comment] ${finalText}` : finalText,
         time: `${origEvent.start} - ${origEvent.end}`,
         start: origEvent.start,
         end: origEvent.end,
@@ -1253,7 +1309,7 @@ app.post('/api/translate/stream', async (req, res) => {
         cps: calculateCps(finalText, duration),
         isSignOrTitle: isSign,
         actor: origEvent.name || '',
-        style: mapStyleName(origEvent.style, origEvent.name),
+        style: finalStyle,
       };
     });
 

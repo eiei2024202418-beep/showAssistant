@@ -3,6 +3,8 @@
  * Pure, storage-injectable logic shared between browser UI (localStorage) and server resume handler.
  */
 
+import type { SignTypesettingMode, DenseSignStrategy } from './signTypesetting';
+
 export interface CheckpointPreviewItem {
   index: number;
   time: string;
@@ -25,6 +27,8 @@ export interface TranslationCheckpoint {
   fileContent: string;
   sourceLanguage: 'auto' | 'ja' | 'en';
   modelChoice: 'gemini-3.8-flash' | 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite';
+  signMode?: SignTypesettingMode;
+  denseSignStrategy?: DenseSignStrategy;
   totalEvents: number;
   translatableCount: number;
   /** Map of AssEvent.index (as string key) -> translated ASS text */

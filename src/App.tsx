@@ -36,10 +36,14 @@ import {
   type TranslationCheckpoint,
 } from './utils/checkpoint';
 
+import type { SignTypesettingMode, DenseSignStrategy } from './utils/signTypesetting';
+
 export default function App() {
   const [file, setFile] = useState<{ name: string; size: number; content: string } | null>(null);
   const [sourceLanguage, setSourceLanguage] = useState<'auto' | 'ja' | 'en'>('auto');
   const [modelChoice, setModelChoice] = useState<'gemini-3.8-flash' | 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite'>('gemini-3.8-flash');
+  const [signMode, setSignMode] = useState<SignTypesettingMode>('smart_hybrid');
+  const [denseSignStrategy, setDenseSignStrategy] = useState<DenseSignStrategy>('merge');
   const [isDragging, setIsDragging] = useState(false);
 
   // Translation State
@@ -117,6 +121,8 @@ export default function App() {
       setSavedCheckpoint(existingCp);
       setSourceLanguage(existingCp.sourceLanguage);
       setModelChoice(existingCp.modelChoice);
+      if (existingCp.signMode) setSignMode(existingCp.signMode);
+      if (existingCp.denseSignStrategy) setDenseSignStrategy(existingCp.denseSignStrategy);
       setPreviewItems(existingCp.previewItems);
       setStats({
         totalEvents: existingCp.totalEvents,
@@ -204,6 +210,8 @@ export default function App() {
 
     const targetSourceLang = resumeTarget ? resumeTarget.sourceLanguage : sourceLanguage;
     const targetModelChoice = resumeTarget ? resumeTarget.modelChoice : modelChoice;
+    const targetSignMode: SignTypesettingMode = resumeTarget?.signMode ?? signMode;
+    const targetDenseSignStrategy: DenseSignStrategy = resumeTarget?.denseSignStrategy ?? denseSignStrategy;
     const fileSignature = computeFileSignature(targetFile.name, targetFile.content);
 
     // Sync UI state when resuming directly from a saved checkpoint banner
@@ -211,6 +219,8 @@ export default function App() {
       setFile(targetFile);
       setSourceLanguage(targetSourceLang);
       setModelChoice(targetModelChoice);
+      setSignMode(targetSignMode);
+      setDenseSignStrategy(targetDenseSignStrategy);
     }
 
     if (options?.forceRestart) {
@@ -254,6 +264,8 @@ export default function App() {
         fileContent: targetFile.content,
         sourceLanguage: targetSourceLang,
         modelChoice: targetModelChoice,
+        signMode: targetSignMode,
+        denseSignStrategy: targetDenseSignStrategy,
         totalEvents: knownTotalEvents,
         translatableCount: knownTranslatableCount,
         translatedLines: { ...accumulatedLines },
@@ -277,6 +289,8 @@ export default function App() {
           fileName: targetFile.name,
           sourceLanguage: targetSourceLang,
           modelChoice: targetModelChoice,
+          signMode: targetSignMode,
+          denseSignStrategy: targetDenseSignStrategy,
           preTranslatedLines: initialSavedCount > 0 ? accumulatedLines : undefined,
         }),
         signal: controller.signal,
@@ -693,6 +707,61 @@ export default function App() {
                 </select>
               </div>
 
+              {/* Sign & Typesetting Mode */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label htmlFor="sign-mode-select" className="block text-xs font-medium text-slate-300">
+                    Sign &amp; Typesetting Mode
+                  </label>
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    {signMode === 'smart_hybrid'
+                      ? 'Auto-Fit'
+                      : signMode === 'clean_top'
+                      ? 'Clean Top'
+                      : 'Original'}
+                  </span>
+                </div>
+                <select
+                  id="sign-mode-select"
+                  aria-label="Sign and Typesetting Mode"
+                  value={signMode}
+                  onChange={(e) => setSignMode(e.target.value as SignTypesettingMode)}
+                  disabled={status === 'translating'}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                >
+                  <option value="smart_hybrid">Smart Hybrid (Auto-Fit &amp; Readable)</option>
+                  <option value="clean_top">Clean Top Signs (Sign_Basic)</option>
+                  <option value="preserve_original">Keep Original Typesetting</option>
+                </select>
+                <p className="text-[11px] text-slate-400 px-1 leading-relaxed">
+                  {signMode === 'smart_hybrid'
+                    ? 'Auto-wraps Burmese inside {\\p1} RPG boxes (\\fscx85–90 / +15% box), scales small fonts by PlayResY with thin outline & no bold, and wraps \\bord0 disclaimers in Sign_Box.'
+                    : signMode === 'clean_top'
+                    ? 'Strips complex tags, comments out {\\p1} masks, and displays all signs uniformly in Sign_Basic at top.'
+                    : 'Keeps original source sign override tags scaled directly to 640×360.'}
+                </p>
+
+                {signMode === 'clean_top' && (
+                  <div className="pt-2 space-y-1.5">
+                    <label htmlFor="dense-sign-select" className="block text-xs font-medium text-slate-300">
+                      Dense Signs (4+ Simultaneous Lines)
+                    </label>
+                    <select
+                      id="dense-sign-select"
+                      aria-label="Dense Signs Strategy"
+                      value={denseSignStrategy}
+                      onChange={(e) => setDenseSignStrategy(e.target.value as DenseSignStrategy)}
+                      disabled={status === 'translating'}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                    >
+                      <option value="merge">Auto-Merge with | (2–3 tidy lines)</option>
+                      <option value="comment">Comment Out (Comment: in Aegisub)</option>
+                      <option value="keep">Keep Separate Lines</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+
               {/* Target Language (Fixed to Burmese) */}
               <div className="space-y-1.5">
                 <label className="block text-xs font-medium text-slate-300">Target Language</label>
@@ -719,7 +788,7 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-1.5 text-slate-300">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span><strong>Signs & Titles:</strong> Exempt from character shortening</span>
+                  <span><strong>Signs &amp; Titles:</strong> Exempt from character shortening</span>
                 </div>
                 <div className="flex items-center gap-1.5 text-slate-300">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -727,7 +796,13 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-1.5 text-slate-400">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span>Single-line dialogue; keeps {'{\\an8}'}, {'{\\pos}'}, tags &amp; Sign \N breaks</span>
+                  <span>
+                    {signMode === 'smart_hybrid'
+                      ? 'Smart Hybrid: Auto-fits {\\p1} boxes, PlayResY font/border & Sign_Box'
+                      : signMode === 'clean_top'
+                      ? 'Clean Top: Uniform Sign_Basic with dense sign auto-merge/comment'
+                      : 'Single-line dialogue; keeps {\\an8}, {\\pos}, tags & Sign \\N breaks'}
+                  </span>
                 </div>
                 <div className="flex items-center gap-1.5 text-slate-400">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
