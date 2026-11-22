@@ -1,5 +1,10 @@
 import React, { useState } from 'react';
 import { Copy, Check, Search, Download, FileCode, List } from 'lucide-react';
+import {
+  type DialogueCpsMode,
+  getCpsModeConfig,
+  isCpsCompliantForMode,
+} from '../utils/cpsMode';
 
 export interface PreviewItem {
   index: number;
@@ -20,6 +25,7 @@ interface SubtitleViewerProps {
   rawAssContent: string;
   downloadFileName: string;
   onDownload: () => void;
+  cpsMode?: DialogueCpsMode;
 }
 
 export const SubtitleViewer: React.FC<SubtitleViewerProps> = ({
@@ -27,6 +33,7 @@ export const SubtitleViewer: React.FC<SubtitleViewerProps> = ({
   rawAssContent,
   downloadFileName,
   onDownload,
+  cpsMode = 'balanced_natural',
 }) => {
   const [activeTab, setActiveTab] = useState<'table' | 'raw'>('table');
   const [filterMode, setFilterMode] = useState<'all' | 'dialogue' | 'signs'>('all');
@@ -43,10 +50,11 @@ export const SubtitleViewer: React.FC<SubtitleViewerProps> = ({
     }
   };
 
-  // Stats calculation
+  // Stats calculation matching selected Dialogue CPS Mode
+  const cpsConfig = getCpsModeConfig(cpsMode);
   const dialogueItems = items.filter((item) => !item.isSignOrTitle);
   const signItems = items.filter((item) => item.isSignOrTitle);
-  const compliantCpsCount = dialogueItems.filter((item) => (item.cps ?? 0) <= 10.0).length;
+  const compliantCpsCount = dialogueItems.filter((item) => isCpsCompliantForMode(item.cps ?? 0, cpsMode)).length;
   const compliantPercent = dialogueItems.length > 0 ? Math.round((compliantCpsCount / dialogueItems.length) * 100) : 100;
 
   const filteredItems = items.filter((item) => {
@@ -97,7 +105,15 @@ export const SubtitleViewer: React.FC<SubtitleViewerProps> = ({
         {/* CPS Compliance Indicator */}
         <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950/40 border border-emerald-800/40 text-[11px] text-emerald-400">
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span>Dialogue CPS &lt; 10: <strong>{compliantPercent}%</strong> ({compliantCpsCount}/{dialogueItems.length} lines)</span>
+          {cpsConfig.viewerComplianceLimit === null ? (
+            <span>
+              Dialogue CPS: <strong>Unlimited</strong> ({dialogueItems.length} dialogue lines)
+            </span>
+          ) : (
+            <span>
+              Dialogue CPS &le; {cpsConfig.viewerComplianceLimit}: <strong>{compliantPercent}%</strong> ({compliantCpsCount}/{dialogueItems.length} lines)
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
@@ -177,7 +193,9 @@ export const SubtitleViewer: React.FC<SubtitleViewerProps> = ({
           </div>
 
           <div className="text-[11px] text-slate-400">
-            Aegisub Layout • Standard CPS Target: &lt; 10
+            {cpsConfig.viewerComplianceLimit === null
+              ? 'Aegisub Layout • Pacing Mode: Natural Unlimited'
+              : `Aegisub Layout • Standard CPS Target: <= ${cpsConfig.viewerComplianceLimit}`}
           </div>
         </div>
       )}
@@ -231,17 +249,24 @@ export const SubtitleViewer: React.FC<SubtitleViewerProps> = ({
                           >
                             SIGN
                           </span>
-                        ) : cpsVal <= 10.4 ? (
+                        ) : cpsConfig.viewerBadgeGreenLimit === null ? (
+                          <span
+                            className="inline-block px-1.5 py-0.5 rounded text-[11px] font-mono font-medium bg-slate-800/80 text-indigo-300 border border-slate-700/80"
+                            title={`CPS: ${cpsVal} (Natural Unlimited — No CPS Limit)`}
+                          >
+                            {Math.round(cpsVal)}
+                          </span>
+                        ) : cpsVal <= cpsConfig.viewerBadgeGreenLimit ? (
                           <span
                             className="inline-block px-1.5 py-0.5 rounded text-[11px] font-mono font-medium bg-emerald-950/60 text-emerald-400 border border-emerald-800/50"
-                            title={`CPS: ${cpsVal} (Good - Under 10)`}
+                            title={`CPS: ${cpsVal} (Good - Within ${cpsConfig.viewerComplianceLimit} CPS)`}
                           >
                             {Math.round(cpsVal)}
                           </span>
                         ) : (
                           <span
                             className="inline-block px-1.5 py-0.5 rounded text-[11px] font-mono font-medium bg-amber-950/60 text-amber-300 border border-amber-800/50"
-                            title={`CPS: ${cpsVal} (Auto-compressed to under 10)`}
+                            title={`CPS: ${cpsVal} (Exceeds ${cpsConfig.viewerComplianceLimit} CPS)`}
                           >
                             {Math.round(cpsVal)}
                           </span>

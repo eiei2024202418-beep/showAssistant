@@ -39,6 +39,98 @@ export function extractTags(text: string): ExtractedTagData {
 }
 
 /**
+ * Normalizes inverted or misplaced ASS italic tag pairs:
+ * - `{\i0}{\i1}Text` -> `{\i1}Text{\i0}` (or strips redundant leading `{\i0}` if `{\i0}` already follows `Text`)
+ * - `{\i0}Text{\i1}` -> `{\i1}Text{\i0}`
+ * - Collapses duplicate adjacent `{\i0}{\i0}` or `{\i1}{\i1}` tags without breaking legitimate mid-line switches.
+ */
+export function normalizeItalicTagPairs(text: string): string {
+  if (!text) return text;
+
+  let res = text;
+
+  // Collapse identical adjacent italic tags (e.g. {\i0}{\i0} -> {\i0})
+  res = res.replace(/\{\\i0\}(?:\s*\{\\i0\})+/g, '{\\i0}');
+  res = res.replace(/\{\\i1\}(?:\s*\{\\i1\})+/g, '{\\i1}');
+
+  // Handle inverted {\i0}{\i1} at the start (optionally preceded by other leading override tags)
+  const invertedStartMatch = res.match(/^((?:\{[^}]*\})*?)\{\\i0\}\s*\{\\i1\}([\s\S]*)$/);
+  if (invertedStartMatch) {
+    const [, beforeTags, rest] = invertedStartMatch;
+    if (/\{\\i0\}/.test(rest)) {
+      res = `${beforeTags}{\\i1}${rest}`;
+    } else {
+      const trailingMatch = rest.match(/^(.*?)((?:\{[^}]*\})+)$/);
+      if (trailingMatch) {
+        res = `${beforeTags}{\\i1}${trailingMatch[1]}{\\i0}${trailingMatch[2]}`;
+      } else {
+        res = `${beforeTags}{\\i1}${rest}{\\i0}`;
+      }
+    }
+  }
+
+  // Handle combined {\i0\i1} inside a single tag block at start
+  const combinedStartMatch = res.match(/^((?:\{[^}]*\})*?)\{([^}]*)\\i0\\i1([^}]*)\}([\s\S]*)$/);
+  if (combinedStartMatch) {
+    const [, beforeTags, innerPre, innerPost, rest] = combinedStartMatch;
+    const rebuiltTag = `{${innerPre}\\i1${innerPost}}`;
+    if (/\{\\i0\}/.test(rest)) {
+      res = `${beforeTags}${rebuiltTag}${rest}`;
+    } else {
+      res = `${beforeTags}${rebuiltTag}${rest}{\\i0}`;
+    }
+  }
+
+  // Handle swapped {\i0}Text{\i1} (closing tag at start, opening tag at end)
+  const swappedEndsMatch = res.match(/^((?:\{[^}]*\})*?)\{\\i0\}([\s\S]*?)\{\\i1\}((?:\{[^}]*\})*)$/);
+  if (swappedEndsMatch && !/\{\\i[01]\}/.test(swappedEndsMatch[2])) {
+    const [, beforeTags, body, afterTags] = swappedEndsMatch;
+    res = `${beforeTags}{\\i1}${body}{\\i0}${afterTags}`;
+  }
+
+  return res;
+}
+
+const INTERRUPTED_BURMESE_PAUSE_END_REGEX =
+  /(?:ဒါပေမဲ့|ဆိုပေမဲ့|ဖြစ်ပေမဲ့|ဒါကြောင့်|မို့လို့|ဆိုတော့|တကယ်လို့|အဲဒါ|အင်း|အဲ|ဟို|ခဏ|ဘာလို့|မဟုတ်မှ|နောက်ပြီး|ပြီးတော့|ဒါဆို|အခုတော့|တကယ်တော့)\.(?=\s*(?:\\N|\\n|$|\{))/;
+
+/**
+ * Converts a stray single '.' at interrupted Burmese speech pauses (e.g. "ဒါပေမဲ့.") into Unicode ellipsis "…":
+ * 1. Any mid-sentence Burmese char + single '.' followed by further text/clause ("ဒါပေမဲ့. ငါ") -> "ဒါပေမဲ့… ငါ"
+ * 2. Any trailing Burmese char + single '.' when originalText had ellipsis/dash ("...", "…", "—", "--") -> "…"
+ * 3. Any trailing Burmese pause conjunction + single '.' ("ဒါပေမဲ့.") -> "ဒါပေမဲ့…"
+ * Leaves ASCII names/sentences ("Naruto.", "Hello world.") and decimals ("1.5") untouched for removeTrailingPeriods.
+ */
+export function fixInterruptedEllipsis(translatedText: string, originalText = ''): string {
+  if (!translatedText) return translatedText;
+
+  let res = translatedText;
+
+  // Convert accidental double-dot '..' attached to Burmese script into '…'
+  res = res.replace(/([\u1000-\u109F])(?<!\.)\.\.(?!\.)/g, '$1…');
+
+  // 1. Mid-sentence interrupted single dot after Burmese char followed by continuing speech
+  res = res.replace(
+    /([\u1000-\u109F])(?<!\.)\.(?!\.)(?=(?:\s*(?:\\N|\\n)?\s*[^\s\d.{}]))/g,
+    '$1…'
+  );
+
+  // 2. Trailing single dot when original line indicates pause/ellipsis/cut-off
+  const origHasPauseMarker = /(?:\.{2,}|…|—|--|―|・)/.test(originalText);
+  if (origHasPauseMarker) {
+    res = res.replace(/([\u1000-\u109F])(?<!\.)\.(?!\.)(?=\s*(?:\\N|\\n|$|\{))/g, '$1…');
+  } else if (INTERRUPTED_BURMESE_PAUSE_END_REGEX.test(res)) {
+    // 3. Common Burmese interrupted pause words ending with single '.' even without explicit source marker
+    res = res.replace(
+      /(ဒါပေမဲ့|ဆိုပေမဲ့|ဖြစ်ပေမဲ့|ဒါကြောင့်|မို့လို့|ဆိုတော့|တကယ်လို့|အဲဒါ|အင်း|အဲ|ဟို|ခဏ|ဘာလို့|မဟုတ်မှ|နောက်ပြီး|ပြီးတော့|ဒါဆို|အခုတော့|တကယ်တော့)\.(?=\s*(?:\\N|\\n|$|\{))/g,
+      '$1…'
+    );
+  }
+
+  return res;
+}
+
+/**
  * Strips trailing English periods '.' from sentence ends, names, or before line breaks and tags,
  * as required by the anime translation rule: "စာသားနဲ့ နာမည်တွေရဲ့ အဆုံးမှာ ပုဒ်မ (.) လုံးဝ မထည့်ရ။"
  */
@@ -99,6 +191,26 @@ export function stripLineBreaksForDialogue(text: string): string {
   return out;
 }
 
+/**
+ * Fixes unambiguous minor Burmese subtitle spelling errors (e.g. "ဂတိ" -> "ကတိ",
+ * "တစ်ကယ်" -> "တကယ်", "ကျွှန်တော်/မ/ုပ်" -> "ကျွန်တော်/မ/ုပ်") while keeping
+ * ASS {...} override tags and valid Pali compounds ("အဂတိ", "သုဂတိ", "ဒုဂ္ဂတိ") untouched.
+ */
+export function fixCommonBurmeseSpelling(text: string): string {
+  if (!text || !/[\u1000-\u109F]/.test(text)) return text;
+
+  return text.replace(/(\{[^}]*\})|([^{]+)/g, (segment, tag) => {
+    if (tag) return tag;
+    return segment
+      .replace(/(?<![အသုဂ္])ဂတိ/g, 'ကတိ')
+      .replace(/ကျွှန်တော်/g, 'ကျွန်တော်')
+      .replace(/ကျွှန်မ/g, 'ကျွန်မ')
+      .replace(/ကျွှန်ုပ်/g, 'ကျွန်ုပ်')
+      .replace(/တစ်ကယ်/g, 'တကယ်')
+      .replace(/ပရိတ်သတ်/g, 'ပရိသတ်');
+  });
+}
+
 export interface ReconcileTagsOptions {
   /** Keep \N line breaks (true for Signs/Text/Title/Lyrics; false for Spoken Dialogue). Defaults to true. */
   preserveLineBreaks?: boolean;
@@ -123,7 +235,8 @@ export function reconcileTags(
 
   if (!originalText) {
     const raw = translatedText || '';
-    return preserveLineBreaks ? raw : stripLineBreaksForDialogue(raw);
+    const lineNormalized = preserveLineBreaks ? raw : stripLineBreaksForDialogue(raw);
+    return normalizeItalicTagPairs(fixCommonBurmeseSpelling(lineNormalized));
   }
 
   // If the model intentionally emptied the dialogue text (e.g., removing JP () SFX or groans),
@@ -140,7 +253,10 @@ export function reconcileTags(
     .replace(/\n/g, '\\N')
     .replace(/\r/g, '\\N');
 
-  // Strip trailing periods per prompt rule
+  // Convert interrupted Burmese single-dot pauses ("ဒါပေမဲ့.") to "…" BEFORE stripping trailing periods
+  result = fixInterruptedEllipsis(result, originalText);
+
+  // Strip remaining trailing periods per prompt rule
   result = removeTrailingPeriods(result);
 
   // Extract all tags from original
@@ -198,7 +314,11 @@ export function reconcileTags(
   }
 
   if (!preserveLineBreaks) {
-    return removeTrailingPeriods(stripLineBreaksForDialogue(result));
+    return fixCommonBurmeseSpelling(
+      normalizeItalicTagPairs(
+        removeTrailingPeriods(fixInterruptedEllipsis(stripLineBreaksForDialogue(result), originalText))
+      )
+    );
   }
 
   // Check \N line breaks for Sign/Title/Lyrics
@@ -224,5 +344,5 @@ export function reconcileTags(
     }
   }
 
-  return result;
+  return fixCommonBurmeseSpelling(normalizeItalicTagPairs(result));
 }

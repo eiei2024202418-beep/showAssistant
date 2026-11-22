@@ -553,9 +553,20 @@ const FORBIDDEN_SCRIPT_DETECTORS: { name: string; regex: RegExp }[] = [
   { name: 'Lao', regex: /[\u0E80-\u0EFF]/ },
   { name: 'Khmer', regex: /[\u1780-\u17FF]/ },
   { name: 'Indic', regex: /[\u0900-\u0DFF]/ },
+  { name: 'Ethiopic', regex: /[\u1200-\u137F\u1380-\u139F\u2D80-\u2DDF]/ },
   { name: 'Cyrillic', regex: /[\u0400-\u04FF]/ },
   { name: 'Arabic / Hebrew', regex: /[\u0600-\u06FF\u0590-\u05FF]/ },
 ];
+
+/**
+ * Strict allowlist for visible subtitle characters:
+ * - Myanmar Unicode (\u1000-\u109F) + Myanmar Extended (\uAA60-\uAA7F, \uA9E0-\uA9FF)
+ * - Basic Latin printable ASCII (\u0020-\u007E: English letters, digits, standard punctuation)
+ * - Standard subtitle whitespace & ZWSP/ZWJ (\s, \u00A0, \u200B-\u200D, \uFEFF)
+ * - Standard subtitle punctuation/symbols (en/em dashes, curly quotes, ellipsis …, bullet, music notes, degree/multiplication)
+ */
+const ALLOWED_VISIBLE_CHAR_REGEX =
+  /^[\u1000-\u109F\uAA60-\uAA7F\uA9E0-\uA9FF\u0020-\u007E\s\u00A0\u200B-\u200D\uFEFF\u2013\u2014\u2018-\u201D\u2022\u2026\u00B0\u00B7\u00D7\u266A\u266B]$/;
 
 /**
  * Strips ASS override tags ({...}) and line breaks (\N, \n, \h) to inspect visible text.
@@ -569,8 +580,8 @@ export function stripAssTagsForValidation(text: string): string {
 }
 
 /**
- * Detects any forbidden non-Burmese / non-ASCII scripts in visible subtitle text
- * (e.g. leftover Japanese, Thai `ค`, Lao `ະ`, Korean, Indic, Cyrillic, Arabic).
+ * Detects any forbidden non-Burmese / non-allowed Unicode scripts in visible subtitle text
+ * (e.g. Ethiopic `ድ`, leftover Japanese, Thai `ค`, Lao `ະ`, Korean, Indic, Cyrillic, Arabic, etc.).
  * ASS override tags ({...}) are stripped first so font names/tags never false-trigger.
  */
 export function detectForbiddenScripts(text: string): { hasForbidden: boolean; scripts: string[] } {
@@ -580,6 +591,25 @@ export function detectForbiddenScripts(text: string): { hasForbidden: boolean; s
   for (const detector of FORBIDDEN_SCRIPT_DETECTORS) {
     if (detector.regex.test(visible)) {
       scripts.push(detector.name);
+    }
+  }
+
+  // Catch-all allowlist guard for any unexpected Unicode character (e.g. Georgian, Armenian, Tibetan, glitch symbols)
+  if (scripts.length === 0 && visible.length > 0) {
+    const unexpectedSamples: string[] = [];
+    for (const ch of visible) {
+      if (!ALLOWED_VISIBLE_CHAR_REGEX.test(ch)) {
+        const cp = ch.codePointAt(0);
+        const hex = cp !== undefined ? `U+${cp.toString(16).toUpperCase().padStart(4, '0')}` : '';
+        const label = `${ch}(${hex})`;
+        if (!unexpectedSamples.includes(label)) {
+          unexpectedSamples.push(label);
+        }
+        if (unexpectedSamples.length >= 3) break;
+      }
+    }
+    if (unexpectedSamples.length > 0) {
+      scripts.push(`Unexpected Unicode (${unexpectedSamples.join(', ')})`);
     }
   }
 
@@ -745,18 +775,22 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     return 'Narration';
   }
 
-  // overlap, italicstop, Top Italics -> TopMyanmar2
+  // overlap, italicstop, Top Italics, Italics Top, italics flashbacktop -> TopMyanmar2
   if (
     lower === 'overlap' ||
     lower === 'italicstop' ||
     lower === 'top italics' ||
     lower === 'top italic' ||
-    lower === 'top_italics'
+    lower === 'top_italics' ||
+    lower === 'italics top' ||
+    lower === 'italic top' ||
+    lower === 'italics flashbacktop' ||
+    lower === 'flashbacktop'
   ) {
     return 'TopMyanmar2';
   }
 
-  // Top, On Top, Default - Top, DefaultTop, Bubble Song, Q7, Q1 -> TopMyanmr
+  // Top, On Top, Default - Top, DefaultTop, Main - Top, Bubble Song, Q7, Q1 -> TopMyanmr
   if (
     lower === 'top' ||
     lower === 'on top' ||
@@ -764,6 +798,8 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     lower === 'defaulttop' ||
     lower === 'default top' ||
     lower === 'default_top' ||
+    lower === 'main - top' ||
+    lower === 'main top' ||
     lower === 'bubble song' ||
     lower === 'q7' ||
     lower === 'q1' ||

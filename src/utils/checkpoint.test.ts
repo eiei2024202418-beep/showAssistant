@@ -139,6 +139,7 @@ test('saveCheckpoint, loadCheckpointBySignature, findLatestCheckpoint, quota evi
       fileContent: content,
       sourceLanguage: 'ja',
       modelChoice: 'gemini-3.8-flash',
+      cpsMode: 'balanced_natural',
       totalEvents: 10,
       translatableCount: 8,
       translatedLines,
@@ -151,6 +152,7 @@ test('saveCheckpoint, loadCheckpointBySignature, findLatestCheckpoint, quota evi
   const cp2 = makeCp('ep2.ass', 2000);
   const cp3 = makeCp('ep3.ass', 3000);
   const cp4 = makeCp('ep4.ass', 4000);
+  cp4.cpsMode = 'natural_unlimited';
 
   assert.equal(saveCheckpoint(cp1, storage), true);
   assert.equal(saveCheckpoint(cp2, storage), true);
@@ -160,6 +162,7 @@ test('saveCheckpoint, loadCheckpointBySignature, findLatestCheckpoint, quota evi
   // Oldest checkpoint (ep1) should be evicted when saving 4th (max 3)
   assert.equal(loadCheckpointBySignature(cp1.signature, storage), null);
   assert.equal(loadCheckpointBySignature(cp4.signature, storage)?.fileName, 'ep4.ass');
+  assert.equal(loadCheckpointBySignature(cp4.signature, storage)?.cpsMode, 'natural_unlimited');
   assert.equal(findLatestCheckpoint(storage)?.fileName, 'ep4.ass');
   assert.equal(isCheckpointResumable(cp4), true);
   assert.equal(getCheckpointTranslatedCount(cp4), 2);

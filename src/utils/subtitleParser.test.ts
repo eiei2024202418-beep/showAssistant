@@ -27,6 +27,8 @@ import {
   extractTags,
   removeTrailingPeriods,
   stripLineBreaksForDialogue,
+  normalizeItalicTagPairs,
+  fixInterruptedEllipsis,
 } from './tagProtector';
 
 const SAMPLE_ASS = `[Script Info]
@@ -708,9 +710,70 @@ Dialogue: 0,0:00:15.00,0:00:18.00,Default,Text,0,0,0,,သတိပေးစာ\\
   assert.equal(reparsedMixed.events[4].text, 'သတိပေးစာ\\Nမဝင်ရ');
 });
 
+test('Foreign script & Unicode allowlist guard rejects Ethiopic glitches (ድንတ်ကြီးပါလား) while allowing Burmese + ellipsis', () => {
+  // Exact user-reported Ethiopic glitch
+  const ethiopic = detectForbiddenScripts('ድንတ်ကြီးပါလား');
+  assert.equal(ethiopic.hasForbidden, true);
+  assert.ok(ethiopic.scripts.includes('Ethiopic'));
 
+  const ethRes = validateTranslatedLine('すげえな', 'ድንတ်ကြီးပါလား');
+  assert.equal(ethRes.valid, false);
+  assert.equal(ethRes.reason, 'forbidden_script');
 
+  // Unexpected Unicode outside allowed Myanmar/Basic Latin/punctuation allowlist (e.g. Georgian / Armenian / Box symbol)
+  const unexpected = detectForbiddenScripts('မင်္ဂလာပါ Ⴀ');
+  assert.equal(unexpected.hasForbidden, true);
+  assert.ok(unexpected.scripts.some((s) => s.includes('Unexpected Unicode')));
 
+  // Allowed Unicode ellipsis, curly quotes, em-dash, Burmese + Basic Latin ASCII
+  assert.equal(detectForbiddenScripts('ဒါပေမဲ့… Shinpei မသွားနဲ့').hasForbidden, false);
+  assert.equal(validateTranslatedLine('But...', 'ဒါပေမဲ့…').valid, true);
+});
 
+test('normalizeItalicTagPairs & reconcileTags fix inverted italic tags ({\\i0}{\\i1}Text -> {\\i1}Text{\\i0})', () => {
+  assert.equal(normalizeItalicTagPairs('{\\i0}{\\i1}စိတ်ထဲက စကား'), '{\\i1}စိတ်ထဲက စကား{\\i0}');
+  assert.equal(normalizeItalicTagPairs('{\\i0}{\\i1}စိတ်ထဲက စကား{\\i0}'), '{\\i1}စိတ်ထဲက စကား{\\i0}');
+  assert.equal(normalizeItalicTagPairs('{\\i0}စိတ်ထဲက စကား{\\i1}'), '{\\i1}စိတ်ထဲက စကား{\\i0}');
+  assert.equal(normalizeItalicTagPairs('{\\an8}{\\i0}{\\i1}တွေးနေတာ'), '{\\an8}{\\i1}တွေးနေတာ{\\i0}');
 
+  // Mid-line intentional italic toggle must remain untouched
+  assert.equal(
+    normalizeItalicTagPairs('ပုံမှန် {\\i1}အတွေး{\\i0} နောက်ဆက်'),
+    'ပုံမှန် {\\i1}အတွေး{\\i0} နောက်ဆက်'
+  );
+
+  // reconcileTags cleans inverted output even when source had {\i1}...{\i0}
+  assert.equal(
+    reconcileTags('{\\i1}Thinking...{\\i0}', '{\\i0}{\\i1}တွေးနေတာ{\\i0}', { preserveLineBreaks: false }),
+    '{\\i1}တွေးနေတာ{\\i0}'
+  );
+});
+
+test('fixInterruptedEllipsis & reconcileTags convert single-dot Burmese pause ("ဒါပေမဲ့.") to "…" while removing sentence-end periods', () => {
+  // Trailing pause conjunction ending with stray '.' -> '…'
+  assert.equal(fixInterruptedEllipsis('ဒါပေမဲ့.', 'But...'), 'ဒါပေမဲ့…');
+  assert.equal(fixInterruptedEllipsis('ဒါပေမဲ့.', 'But'), 'ဒါပေမဲ့…');
+
+  // Mid-sentence interrupted pause -> '…'
+  assert.equal(fixInterruptedEllipsis('ဒါပေမဲ့. ငါသွားမယ်', 'But... I will go'), 'ဒါပေမဲ့… ငါသွားမယ်');
+
+  // ASCII name period is left for removeTrailingPeriods -> stripped cleanly by reconcileTags
+  assert.equal(fixInterruptedEllipsis('Shinpei.', 'Shinpei...'), 'Shinpei.');
+  assert.equal(reconcileTags('Shinpei...', 'Shinpei.', { preserveLineBreaks: false }), 'Shinpei');
+  assert.equal(fixInterruptedEllipsis('မဖြစ်နိုင်ဘူး.', 'No way...'), 'မဖြစ်နိုင်ဘူး…');
+
+  // End-to-end reconcileTags preserves "…" on pauses while removing normal trailing periods
+  assert.equal(reconcileTags('But...', 'ဒါပေမဲ့.', { preserveLineBreaks: false }), 'ဒါပေမဲ့…');
+  assert.equal(reconcileTags('I am going.', 'ငါသွားမယ်.', { preserveLineBreaks: false }), 'ငါသွားမယ်');
+});
+
+test('fixCommonBurmeseSpelling & reconcileTags fix "ဂတိ" -> "ကတိ" while preserving Pali compounds and ASS tags', () => {
+  assert.equal(reconcileTags('I promise.', 'ငါ ဂတိပေးတယ်.', { preserveLineBreaks: false }), 'ငါ ကတိပေးတယ်');
+  assert.equal(reconcileTags('{\\i1}Promise me.{\\i0}', '{\\i1}ဂတိပေးပါ{\\i0}', { preserveLineBreaks: false }), '{\\i1}ကတိပေးပါ{\\i0}');
+  // Pali compounds (အဂတိ, သုဂတိ, ဒုဂ္ဂတိ) must NOT be corrupted
+  assert.equal(reconcileTags('No bias.', 'အဂတိ မလိုက်စားနဲ့', { preserveLineBreaks: false }), 'အဂတိ မလိုက်စားနဲ့');
+  // Other unambiguous fixes
+  assert.equal(reconcileTags('Really?', 'တစ်ကယ်လား', { preserveLineBreaks: false }), 'တကယ်လား');
+  assert.equal(reconcileTags('I am fine.', 'ကျွှန်တော် အဆင်ပြေတယ်', { preserveLineBreaks: false }), 'ကျွန်တော် အဆင်ပြေတယ်');
+});
 

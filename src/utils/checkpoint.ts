@@ -4,6 +4,8 @@
  */
 
 import type { SignTypesettingMode, DenseSignStrategy } from './signTypesetting';
+import type { DialogueCpsMode } from './cpsMode';
+import type { EpisodeLockProfile } from './episodeGlossary';
 
 export interface CheckpointPreviewItem {
   index: number;
@@ -29,6 +31,8 @@ export interface TranslationCheckpoint {
   modelChoice: 'gemini-3.8-flash' | 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite';
   signMode?: SignTypesettingMode;
   denseSignStrategy?: DenseSignStrategy;
+  cpsMode?: DialogueCpsMode;
+  episodeLock?: EpisodeLockProfile;
   totalEvents: number;
   translatableCount: number;
   /** Map of AssEvent.index (as string key) -> translated ASS text */

@@ -37,6 +37,8 @@ import {
 } from './utils/checkpoint';
 
 import type { SignTypesettingMode, DenseSignStrategy } from './utils/signTypesetting';
+import { type DialogueCpsMode, getCpsModeConfig } from './utils/cpsMode';
+import type { EpisodeLockProfile } from './utils/episodeGlossary';
 
 export default function App() {
   const [file, setFile] = useState<{ name: string; size: number; content: string } | null>(null);
@@ -44,6 +46,7 @@ export default function App() {
   const [modelChoice, setModelChoice] = useState<'gemini-3.8-flash' | 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite'>('gemini-3.8-flash');
   const [signMode, setSignMode] = useState<SignTypesettingMode>('smart_hybrid');
   const [denseSignStrategy, setDenseSignStrategy] = useState<DenseSignStrategy>('merge');
+  const [cpsMode, setCpsMode] = useState<DialogueCpsMode>('balanced_natural');
   const [isDragging, setIsDragging] = useState(false);
 
   // Translation State
@@ -123,6 +126,7 @@ export default function App() {
       setModelChoice(existingCp.modelChoice);
       if (existingCp.signMode) setSignMode(existingCp.signMode);
       if (existingCp.denseSignStrategy) setDenseSignStrategy(existingCp.denseSignStrategy);
+      if (existingCp.cpsMode) setCpsMode(existingCp.cpsMode);
       setPreviewItems(existingCp.previewItems);
       setStats({
         totalEvents: existingCp.totalEvents,
@@ -212,6 +216,7 @@ export default function App() {
     const targetModelChoice = resumeTarget ? resumeTarget.modelChoice : modelChoice;
     const targetSignMode: SignTypesettingMode = resumeTarget?.signMode ?? signMode;
     const targetDenseSignStrategy: DenseSignStrategy = resumeTarget?.denseSignStrategy ?? denseSignStrategy;
+    const targetCpsMode: DialogueCpsMode = resumeTarget?.cpsMode ?? cpsMode;
     const fileSignature = computeFileSignature(targetFile.name, targetFile.content);
 
     // Sync UI state when resuming directly from a saved checkpoint banner
@@ -221,6 +226,7 @@ export default function App() {
       setModelChoice(targetModelChoice);
       setSignMode(targetSignMode);
       setDenseSignStrategy(targetDenseSignStrategy);
+      setCpsMode(targetCpsMode);
     }
 
     if (options?.forceRestart) {
@@ -232,6 +238,7 @@ export default function App() {
     const accumulatedLines: Record<string, string> = resumeTarget
       ? { ...resumeTarget.translatedLines }
       : {};
+    let accumulatedEpisodeLock: EpisodeLockProfile | undefined = resumeTarget?.episodeLock;
     let knownTotalEvents = resumeTarget ? resumeTarget.totalEvents : 0;
     let knownTranslatableCount = resumeTarget ? resumeTarget.translatableCount : 0;
     const initialSavedCount = Object.keys(accumulatedLines).length;
@@ -266,6 +273,8 @@ export default function App() {
         modelChoice: targetModelChoice,
         signMode: targetSignMode,
         denseSignStrategy: targetDenseSignStrategy,
+        cpsMode: targetCpsMode,
+        ...(accumulatedEpisodeLock ? { episodeLock: accumulatedEpisodeLock } : {}),
         totalEvents: knownTotalEvents,
         translatableCount: knownTranslatableCount,
         translatedLines: { ...accumulatedLines },
@@ -291,7 +300,9 @@ export default function App() {
           modelChoice: targetModelChoice,
           signMode: targetSignMode,
           denseSignStrategy: targetDenseSignStrategy,
+          cpsMode: targetCpsMode,
           preTranslatedLines: initialSavedCount > 0 ? accumulatedLines : undefined,
+          preExtractedEpisodeLock: resumeTarget?.episodeLock,
         }),
         signal: controller.signal,
       });
@@ -345,6 +356,10 @@ export default function App() {
                 );
               } else {
                 setStatusMessage(`Initialized: ${eventData.translatableCount} dialogue lines identified.`);
+              }
+            } else if (eventData.type === 'episode_lock') {
+              if (eventData.episodeLock) {
+                accumulatedEpisodeLock = eventData.episodeLock as EpisodeLockProfile;
               }
             } else if (eventData.type === 'status') {
               setStatusMessage(eventData.statusMessage);
@@ -762,6 +777,37 @@ export default function App() {
                 )}
               </div>
 
+              {/* Dialogue CPS / Pacing Mode */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label htmlFor="cps-mode-select" className="block text-xs font-medium text-slate-300">
+                    Dialogue CPS / Pacing Mode
+                  </label>
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">
+                    {getCpsModeConfig(cpsMode).shortLabel}
+                  </span>
+                </div>
+                <select
+                  id="cps-mode-select"
+                  aria-label="Dialogue CPS and Pacing Mode"
+                  value={cpsMode}
+                  onChange={(e) => setCpsMode(e.target.value as DialogueCpsMode)}
+                  disabled={status === 'translating'}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                >
+                  <option value="strict_compact">Level 1: Strict Compact (CPS &lt; 10)</option>
+                  <option value="balanced_natural">Level 2: Balanced Natural (Recommended)</option>
+                  <option value="natural_unlimited">Level 3: Natural Unlimited (No Limit)</option>
+                </select>
+                <p className="text-[11px] text-slate-400 px-1 leading-relaxed">
+                  {cpsMode === 'strict_compact'
+                    ? 'Strict CPS < 10 (Target 8.8) with local Burmese contractions and 2-pass compression for fast reading.'
+                    : cpsMode === 'balanced_natural'
+                    ? 'Target ~12–14 CPS (floor 10 chars). Preserves character pronouns, endings & polite tone (no regex stripping); only trims lines > 14.5 CPS.'
+                    : 'Zero CPS limits or compression passes — translates at 100% natural spoken anime pacing.'}
+                </p>
+              </div>
+
               {/* Target Language (Fixed to Burmese) */}
               <div className="space-y-1.5">
                 <label className="block text-xs font-medium text-slate-300">Target Language</label>
@@ -780,11 +826,27 @@ export default function App() {
               <div className="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-400 space-y-1.5">
                 <div className="text-slate-200 font-semibold flex items-center justify-between">
                   <span>Guaranteed Subtitle Integrity:</span>
-                  <span className="text-[10px] font-mono text-emerald-400 font-normal">Target CPS &lt; 10</span>
+                  <span className="text-[10px] font-mono text-emerald-400 font-normal">
+                    {getCpsModeConfig(cpsMode).targetBadge}
+                  </span>
                 </div>
                 <div className="flex items-center gap-1.5 text-slate-300">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span><strong>CPS &lt; 10 Limit:</strong> Spoken lines compressed for fast reading</span>
+                  <span>
+                    {cpsMode === 'strict_compact' ? (
+                      <>
+                        <strong>CPS &lt; 10 Limit:</strong> Spoken lines compressed for fast reading
+                      </>
+                    ) : cpsMode === 'balanced_natural' ? (
+                      <>
+                        <strong>Balanced Natural (~12–14 CPS):</strong> Keeps tone &amp; endings; trims only &gt;14.5 CPS
+                      </>
+                    ) : (
+                      <>
+                        <strong>Natural Unlimited:</strong> Full expressive dialogue with no CPS trimming
+                      </>
+                    )}
+                  </span>
                 </div>
                 <div className="flex items-center gap-1.5 text-slate-300">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -981,6 +1043,7 @@ export default function App() {
               rawAssContent={translatedAss}
               downloadFileName={downloadFileName}
               onDownload={handleDownload}
+              cpsMode={cpsMode}
             />
           </div>
         )}
