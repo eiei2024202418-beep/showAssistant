@@ -348,17 +348,19 @@ export function getMaxCharsForCps(durationSec: number, targetCps = 9.0): number 
  * 4. Bracketed notation ([Sign: ...], (Note: ...), 【...】) and Title prefixes (Episode, Chapter, 第...話)
  */
 export function isSignOrTitle(actor: string, style: string, text: string): boolean {
-  const actorClean = (actor || '').trim().toLowerCase();
   const styleClean = (style || '').trim().toLowerCase();
   const rawText = (text || '').trim();
 
-  // 1. Explicit Sign/Text/Title in Actor name (if file includes Actor)
-  const signActorKeywords = [
-    'sign', 'signs', 'text', 'title', 'note', 'box', 'screen',
-    'op', 'ed', 'song', 'lyrics', 'credit', 'insert', 'info',
-    'caption', 'header', 'label', 'card', 'board', 'phone', 'book'
-  ];
-  if (actorClean && signActorKeywords.some((k) => actorClean === k || actorClean.startsWith(k + '_') || actorClean.endsWith('_' + k) || actorClean.includes(k))) {
+  // 1. Explicit Sign/Text/Title in Actor name (using token boundaries so character names like FRIEDRICH/EDWARD/SOPHIA never false-trigger on 'ed'/'op')
+  const rawActor = (actor || '').trim();
+  if (
+    rawActor &&
+    (/(?:^|[^a-z])(?:sign|signs|text|title|note|box|screen|op|ed|song|lyric|lyrics|credit|credits|insert|info|caption|header|label|card|board|phone|book|karaoke|kashi|rpg)\d*(?:$|[^a-z])/i.test(
+      rawActor
+    ) ||
+      /(?:Sign|Text|Title|Lyrics|Credit)(?:$|[^a-z])/.test(rawActor) ||
+      /^(?:ep|main|sub|onscreen|rpg)(?:title|sign|text|lyrics|credit)s?\d*$/i.test(rawActor))
+  ) {
     return true;
   }
 
@@ -371,6 +373,7 @@ export function isSignOrTitle(actor: string, style: string, text: string): boole
   ];
   if (
     signStyles.some((k) => styleClean === k || styleClean.startsWith(k) || styleClean.includes(k)) ||
+    styleClean === 'font1' ||
     /(?:^|[\s_.-])(?:text|note|op|ed|os|bgm)(?:$|[\s_.-])/i.test(styleClean)
   ) {
     return true;
@@ -545,9 +548,12 @@ const BURMESE_CHAR_REGEX = /[\u1000-\u109F\uAA60-\uAA7F\uA9E0-\uA9FF]/;
 
 const FORBIDDEN_SCRIPT_DETECTORS: { name: string; regex: RegExp }[] = [
   { name: 'Japanese (Hiragana)', regex: /[\u3040-\u309F]/ },
-  { name: 'Japanese (Katakana)', regex: /[\u30A0-\u30FF\uFF65-\uFF9F\u30FC]/ },
-  { name: 'CJK / Kanji', regex: /[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF\u3005]/ },
-  { name: 'Japanese Punctuation', regex: /[\u3001\u3002\u300C-\u3011\uFF01\uFF1F]/ },
+  { name: 'Japanese (Katakana)', regex: /[\u30A0-\u30FF\u31F0-\u31FF\uFF65-\uFF9F\u30FC]/ },
+  {
+    name: 'CJK / Kanji',
+    regex: /[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF\u2E80-\u2FDF\u3005\u3007\u303B\u{20000}-\u{2FA1F}]/u,
+  },
+  { name: 'Japanese Punctuation', regex: /[\u3000-\u303F\uFF01-\uFF64\uFFE0-\uFFEF]/ },
   { name: 'Korean (Hangul)', regex: /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/ },
   { name: 'Thai', regex: /[\u0E00-\u0E7F]/ },
   { name: 'Lao', regex: /[\u0E80-\u0EFF]/ },
@@ -580,8 +586,55 @@ export function stripAssTagsForValidation(text: string): string {
 }
 
 /**
+ * Extracts unique contiguous tokens of disallowed/foreign characters (e.g. "無號機", "คະ")
+ * outside ASS override tags ({...}) and line breaks (\N, \n, \h) for targeted LLM repair prompts.
+ */
+export function extractForbiddenTokens(text: string): string[] {
+  const tokens: string[] = [];
+  const visible = stripAssTagsForValidation(text);
+  let current = '';
+
+  for (const ch of visible) {
+    if (!ALLOWED_VISIBLE_CHAR_REGEX.test(ch)) {
+      current += ch;
+    } else if (current) {
+      if (!tokens.includes(current)) {
+        tokens.push(current);
+      }
+      current = '';
+    }
+  }
+  if (current && !tokens.includes(current)) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+/**
+ * Removes any character not in ALLOWED_VISIBLE_CHAR_REGEX outside ASS override tags ({...})
+ * and line breaks (\N, \n, \h), preserving ASS formatting intact.
+ */
+export function stripStrayForbiddenChars(text: string): string {
+  if (!text) return text;
+  const cleaned = text.replace(/(\{[^}]*\}|\\[Nnh])|([^{\\]+|\\)/g, (segment, protectedToken) => {
+    if (protectedToken) return protectedToken;
+    let out = '';
+    for (const ch of segment) {
+      if (ALLOWED_VISIBLE_CHAR_REGEX.test(ch)) {
+        out += ch;
+      }
+    }
+    return out.replace(/ {2,}/g, ' ');
+  });
+  return cleaned
+    .replace(/(^|\{[^}]*\}|\\N) +/g, '$1')
+    .replace(/ +(\{[^}]*\}|\\N|$)/g, '$1')
+    .trim();
+}
+
+/**
  * Detects any forbidden non-Burmese / non-allowed Unicode scripts in visible subtitle text
- * (e.g. Ethiopic `ድ`, leftover Japanese, Thai `ค`, Lao `ະ`, Korean, Indic, Cyrillic, Arabic, etc.).
+ * (e.g. Ethiopic `ድ`, leftover Japanese/Kanji `無號機`, Thai `ค`, Lao `ະ`, Korean, Indic, Cyrillic, Arabic, etc.).
  * ASS override tags ({...}) are stripped first so font names/tags never false-trigger.
  */
 export function detectForbiddenScripts(text: string): { hasForbidden: boolean; scripts: string[] } {
@@ -728,28 +781,46 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     return 'Sign_Box';
   }
 
-  // Sign_*, Signs, Layer1_Font1, Q9, Q8, Q3, Q4, Q5 -> Sign_Basic
+  // Sign_*, Signs, Layer1_Font1, Font1, Q9, Q8, Q3, Q4, Q5 -> Sign_Basic
   if (
     lower.startsWith('sign_') ||
     lower.startsWith('signs') ||
     lower === 'signs' ||
     lower === 'layer1_font1' ||
+    lower === 'font1' ||
     ['q9', 'q8', 'q3', 'q4', 'q5'].includes(lower)
   ) {
     return 'Sign_Basic';
   }
 
   // Flashback Italics -> Myanmar31
-  if (lower === 'flashback italics' || lower === 'flashback italic' || lower === 'flashback_italics') {
+  if (
+    lower === 'flashback italics' ||
+    lower === 'flashback italic' ||
+    lower === 'flashback_italics' ||
+    lower === 'main - flashback italics' ||
+    lower === 'main - flashback italic' ||
+    lower === 'main flashback italics' ||
+    lower === 'default - flashback italics'
+  ) {
     return 'Myanmar31';
   }
 
-  // Flashback -> Myanmar3
-  if (lower === 'flashback' || lower === 'flash_back') {
+  // Flashback, Main - Flashback -> Myanmar3
+  if (
+    lower === 'flashback' ||
+    lower === 'flash_back' ||
+    lower === 'main - flashback' ||
+    lower === 'main flashback' ||
+    lower === 'main_flashback' ||
+    lower === 'default - flashback' ||
+    lower === 'default flashback' ||
+    lower === 'default_flashback'
+  ) {
     return 'Myanmar3';
   }
 
-  // Italics, Main - Italics, DefaultItalics, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6, s7 -> Myanmar2
+  // Italics, Main - Italics, DefaultItalics, Font2_OutlineShadow, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6, s7 -> Myanmar2
   if (
     lower === 'italics' ||
     lower === 'italic' ||
@@ -761,6 +832,7 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     lower === 'default - italic' ||
     lower === 'default italics' ||
     lower === 'default_italics' ||
+    lower === 'font2_outlineshadow' ||
     lower === 'ed lyrics white' ||
     lower === 'ed lyrics white - eng' ||
     lower === 'q2' ||
@@ -857,21 +929,41 @@ export const BURMESE_STYLES = [
   'Style: CreditStyle,Myanmar AyarTyepwriter,15,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,1,1,2,10,10,10,1',
 ];
 
+const YASEI_LAST_BOSS_PATTERNS = [
+  'yasei no last boss ga arawareta',
+  'a wild last boss appeared',
+];
+
 const SEASON_2_ANIME_PATTERNS = [
   'tougen anki nikko kegon no taki hen',
   'tougen anki nikkou kegon no taki hen',
-  'yasei no last boss ga arawareta',
+  ...YASEI_LAST_BOSS_PATTERNS,
   'koori no jouheki',
   'hotel inhumans',
 ];
+
+const TRAILING_SUBTITLE_SUFFIX_REGEX =
+  /[._-](?:ass|srt|ssa|vtt|sub|translated|burmese|myanmar|mm|clean|fixed|edited|final|forced|sdh|cc|hi|signs?|songs?|dialogue|full|default|commentary|track\d*|sub\d*|jpn|jap|ja|jp|eng|en|en-us|en-gb|bur|mya|my|chi|zho|zh|zh-cn|zh-tw|zh-hk|chs|cht|kor|ko|spa|es|es-la|es-419|fra|fre|fr|deu|ger|de|ita|it|por|pt|pt-br|rus|ru|ara|ar|ind|id|msa|may|ms|tha|th|vie|vi|pol|pl|tur|tr|nld|dut|nl|swe|sv|fin|fi|nor|no|dan|da|ces|cze|cs|hun|hu|ron|rum|ro|ukr|uk|heb|he|hin|und|mul|orig|raw)(?:\s*\(\d+\))?$/i;
+
+/**
+ * Strips chained trailing subtitle extensions, language codes (e.g. .jpn, .eng, .en-US),
+ * and output tags (e.g. .translated, .forced, .sdh) from the end of a filename.
+ */
+function stripTrailingSubtitleSuffixes(fileName: string): string {
+  let base = (fileName || '').trim();
+  while (base.length > 0) {
+    const next = base.replace(TRAILING_SUBTITLE_SUFFIX_REGEX, '').trim();
+    if (next === base) break;
+    base = next;
+  }
+  return base;
+}
 
 /**
  * Determines whether the uploaded file belongs to an anime that should show "Season 2".
  */
 export function detectSeasonNumber(fileName: string): number {
-  const normalized = (fileName || '')
-    .replace(/\.(ass|srt)$/i, '')
-    .replace(/\.translated$/i, '')
+  const normalized = stripTrailingSubtitleSuffixes(fileName)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -883,47 +975,79 @@ export function detectSeasonNumber(fileName: string): number {
 
 /**
  * Extracts episode number from anime subtitle filenames such as:
+ * - "[Erai-raws] Tank Chair - 08 [1080p AMZN WEB-DL AVC EAC3][MultiSub][D86EA8EA].jpn.translated.ass" -> "8"
  * - "[Erai-raws] Koori no Jouheki 2nd Season - 07 [1080p...].ass" -> "7"
  * - "[Erai-raws] jukishi - 20 [1080p...].ass" -> "20"
  * - "Anime S02E03 [1080p].ass" -> "3"
  * - "Tougen Anki - Nikko Kegon no Taki-hen - 12v2.srt" -> "12"
+ * - "Yasei no Last Boss ga Arawareta! - 13 [1080p].ass" -> "1" (Season 2 Ep 1; 21 -> Ep 9)
  */
 export function extractEpisodeNumber(fileName: string): string {
-  const base = (fileName || '')
-    .replace(/\.(ass|srt)$/i, '')
-    .replace(/\.translated$/i, '')
-    .trim();
+  const base = stripTrailingSubtitleSuffixes(fileName);
 
   if (!base) return '1';
 
+  const normalizedTitle = base
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const isYaseiLastBoss = YASEI_LAST_BOSS_PATTERNS.some((p) => normalizedTitle.includes(p));
+
   const formatEp = (raw: string): string => {
-    const cleaned = raw.replace(/^0+(?=\d)/, '');
-    return cleaned || '1';
+    const cleaned = raw.replace(/^0+(?=\d)/, '') || '1';
+    if (isYaseiLastBoss) {
+      const parsedNum = Number(cleaned);
+      if (Number.isFinite(parsedNum) && parsedNum >= 13 && parsedNum <= 24) {
+        return String(Number((parsedNum - 12).toFixed(2)));
+      }
+    }
+    return cleaned;
   };
 
-  // 1. Explicit S02E07 / Episode 07 / Ep 07 markers
-  const explicitMatch = base.match(/(?:^|[^a-z0-9])(?:S\d{1,2}\s*E|Episode|Ep\.?)\s*0*(\d{1,4}(?:\.\d+)?)(?=[^a-z0-9]|v\d|$)/i);
+  // 1. Explicit S02E07 / Episode 07 / Ep 07 / 第07話 / E07 markers
+  const explicitMatch = base.match(
+    /(?:^|[^a-z0-9])(?:S\d{1,2}\s*E|Episode|Ep\.?)\s*0*(\d{1,4}(?:\.\d+)?)(?=[^a-z0-9]|v\d|$)/i
+  );
   if (explicitMatch) {
     return formatEp(explicitMatch[1]);
   }
 
-  // Strip bracketed/parenthetical release metadata like [1080p], [MultiSub], [B66956E8], (WEB)
-  const withoutBrackets = base
-    .replace(/\[[^\]]*\]/g, ' ')
-    .replace(/\([^)]*\)/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const jpExplicitMatch = base.match(/第\s*0*(\d{1,4}(?:\.\d+)?)\s*話/);
+  if (jpExplicitMatch) {
+    return formatEp(jpExplicitMatch[1]);
+  }
 
-  // 2. Standard fansub separator " - 07" or " - 07v2" near end (after removing [tags])
-  const dashMatches = [...withoutBrackets.matchAll(/\s-\s*0*(\d{1,4}(?:\.\d+)?)(?:v\d+)?(?=\s*(?:END|FINAL|$))/gi)];
+  // Strip bracketed/parenthetical release metadata like [1080p], [MultiSub], [D86EA8EA], (WEB), then any newly exposed .jpn/.eng suffixes
+  const withoutBrackets = stripTrailingSubtitleSuffixes(
+    base
+      .replace(/\[[^\]]*\]/g, ' ')
+      .replace(/\([^)]*\)/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
+
+  // 2. Standard fansub separator " - 08", " - 08v2", or " - 08 - Episode Title" (after removing [tags] & .jpn)
+  const dashMatches = [
+    ...withoutBrackets.matchAll(/(?:^|\s)[-\u2013\u2014]\s*0*(\d{1,4}(?:\.\d+)?)(?:v\d+)?(?=\s*(?:[-\u2013\u2014:\.]|END|FINAL|$))/gi),
+  ];
   if (dashMatches.length > 0) {
     return formatEp(dashMatches[dashMatches.length - 1][1]);
   }
 
-  // 3. Fallback: remove resolution/codec/season markers, then match trailing episode number
+  // 2.5 Hash-prefixed episode numbers (#8 / #08) or standalone scene-style 2-3 digit E08
+  const hashOrSceneEMatch = withoutBrackets.match(/(?:^|[\s._-])(?:#0*(\d{1,3}(?:\.\d+)?)|E0*(\d{2,3}(?:\.\d+)?))(?:v\d+)?(?=$|[\s._-])/i);
+  if (hashOrSceneEMatch) {
+    return formatEp(hashOrSceneEMatch[1] || hashOrSceneEMatch[2]);
+  }
+
+  // 3. Fallback: remove resolution/codec/source/season markers, then match trailing episode number
   const cleanedForTrailing = withoutBrackets
-    .replace(/\b(?:\d{3,4}p|x26[45]|h\.?26[45]|10bit|8bit|season\s*\d+|\d+(?:st|nd|rd|th)\s+season)\b/gi, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(
+      /\b(?:\d{3,4}p|x26[45]|h\.?26[45]|hevc|avc|aac(?:\d+(?:\.\d+)?)?|eac3|ac3|ddp(?:\d+(?:\.\d+)?)?|flac|opus|10bit|8bit|web-?dl|webrip|bluray|bdrip|dvdrip|hdtv|amzn|nf|cr|baha|bilibili|hidive|multisub|multi|dual[.\s_-]?audio|proper|repack|season\s*\d+|\d+(?:st|nd|rd|th)\s+season)\b/gi,
+      ' '
+    )
+    .replace(/[._\s]+/g, ' ')
     .trim();
 
   const trailingMatch = cleanedForTrailing.match(/(?:^|[\s._#-])0*(\d{1,3}(?:\.\d+)?)(?:v\d+)?(?:\s*(?:END|FINAL))?$/i);
@@ -935,32 +1059,28 @@ export function extractEpisodeNumber(fileName: string): string {
 }
 
 /**
- * Finds the Start timestamp of the first spoken dialogue line (skipping signs/titles, comments, and removed SFX)
+ * Finds the Start timestamp of the very first visible subtitle line (any style/type: Dialogue, Flashback,
+ * Sign, Title, Narration, Lyrics — skipping Comments, watermark lines, and empty/drawing lines)
  * to use as the End timestamp for CreditStyle and MarqueeStyle.
  */
 export function getFirstSpokenDialogueStart(events: AssEvent[]): string {
   let bestStart: string | null = null;
   let bestSeconds = Number.POSITIVE_INFINITY;
 
-  // Prefer actual non-empty spoken dialogue lines (not signs/titles)
   for (const e of events) {
     if (e.type !== 'Dialogue' || !e.isTranslatable) continue;
-    if (isSignOrTitle(e.name, e.style, e.text)) continue;
+    const styleLower = (e.style || '').trim().toLowerCase();
+    if (
+      styleLower === '13' ||
+      styleLower === 'episode' ||
+      styleLower === 'creditstyle' ||
+      styleLower === 'marqueestyle'
+    ) {
+      continue;
+    }
     const visible = (e.text || '').replace(/\{[^}]*\}/g, '').replace(/\\[Nnh]/g, '').trim();
     if (!visible) continue;
 
-    const secs = parseAssTimeToSeconds(e.start);
-    if (secs > 0 && secs < bestSeconds) {
-      bestSeconds = secs;
-      bestStart = e.start;
-    }
-  }
-
-  if (bestStart) return bestStart;
-
-  // Fallback to any translatable dialogue line with start > 0
-  for (const e of events) {
-    if (e.type !== 'Dialogue' || !e.isTranslatable) continue;
     const secs = parseAssTimeToSeconds(e.start);
     if (secs > 0 && secs < bestSeconds) {
       bestSeconds = secs;

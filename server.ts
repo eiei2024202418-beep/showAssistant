@@ -25,6 +25,9 @@ import {
   findNearbyDuplicateClusters,
   unifyNearbyDuplicateTranslations,
   validateTranslatedLine,
+  detectForbiddenScripts,
+  extractForbiddenTokens,
+  stripStrayForbiddenChars,
   buildWatermarkEvents,
   hasWatermarkEvents,
   mapStyleName,
@@ -221,8 +224,8 @@ Inspect the episode filename, speaker list ("actors"), detected proper phrases (
      * Examples: "Guillier Gorge" -> "Guillier ချောက်ကမ်းပါး", "Kingdom of Lionel" / "Lionel Kingdom" -> "Lionel နိုင်ငံတော်", "Dacan Plains" -> "Dacan လွင်ပြင်".
    - RULE B (Ranks, Noble & Military Titles — "rank"): Translate ALL ranks consistently into pure Burmese (NEVER mix English/Burmese ranks):
      * Examples: "General" -> "ဗိုလ်ချုပ်", "Crown Prince" -> "အိမ်ရှေ့မင်းသား", "His Majesty" -> "ဘုရင်မင်းမြတ်", "Commander" -> "တပ်မှူး", "Duke" -> "မြို့စားကြီး".
-   - RULE C (Titles & Key Concepts — "title" / "term"): Lock episode titles and common nouns ("Firefly Wedding" -> "ပိုးစုန်းကြူးမင်္ဂလာပွဲ", "Heaven" -> "ကောင်းကင်ဘုံ", "Devil" -> "နတ်ဆိုး").
-   - Return ONLY Myanmar Unicode (\\u1000-\\u109F) plus Basic Latin/digits for proper Romaji names. NEVER output Thai, Lao, Ethiopic, Japanese, or Chinese characters.`;
+   - RULE C (Titles & Key Concepts — "title" / "term"): Lock episode titles and common nouns ("Firefly Wedding" -> "ပိုးစုန်းကြူးမင်္ဂလာပွဲ", "Heaven" -> "ကောင်းကင်ဘုံ", "Devil" -> "နတ်ဆိုး"). For Japanese Kanji unit/mecha/device codenames (e.g. "無号機" / "無號機"), translate or romanize into English/Burmese (e.g. "Unit 0", "Mugouki", or "နံပါတ်မဲ့ယူနစ်") — NEVER put Kanji/Kana/CJK inside "burmeseTerm"!
+   - Return ONLY Myanmar Unicode (\\u1000-\\u109F) plus Basic Latin/digits for proper Romaji names. NEVER output Thai, Lao, Ethiopic, Japanese, or Chinese/CJK characters anywhere in "burmeseTerm" or "pronouns".`;
 
   const prompt = `Analyze this episode sample and build the strict episode consistency lock JSON:
 ${JSON.stringify(sample)}`;
@@ -491,18 +494,15 @@ interface InvalidLineRepairInput {
 
 /**
  * Surgical last-resort sanitizer ONLY for lines that already contain valid Burmese dialogue
- * plus 1-2 stray foreign tokens (e.g. Thai `ค` or Lao `ະ` leaked mid-token) after LLM repair retries.
- * Never strips Japanese/CJK lines because untranslated Japanese lines must be re-translated, not deleted.
+ * plus stray foreign tokens (e.g. CJK/Kanji `無號機`, Hiragana/Katakana, Thai `ค`, Lao `ະ`, Ethiopic `ድ`)
+ * after multi-line + solo LLM repair retries fail.
+ * Never strips lines that lack Burmese because completely untranslated source lines must not be deleted.
  */
 function stripStrayNonBurmeseTokensIfBurmesePresent(text: string): string {
   const hasBurmese = /[\u1000-\u109F\uAA60-\uAA7F\uA9E0-\uA9FF]/.test(text);
   if (!hasBurmese) return text;
 
-  // Preserve ASS {...} tags intact, only clean visible segments
-  return text.replace(/(\{[^}]*\})|([^{]+)/g, (segment, tag) => {
-    if (tag) return tag;
-    return segment.replace(/[\u0E00-\u0E7F\u0E80-\u0EFF\u1200-\u137F\u1380-\u139F\u2D80-\u2DDF\u1780-\u17FF\u0900-\u0DFF\u0400-\u04FF\u0600-\u06FF\u0590-\u05FF\uAC00-\uD7AF]/g, '');
-  });
+  return stripStrayForbiddenChars(text);
 }
 
 /**
@@ -558,22 +558,28 @@ async function repairInvalidLines(
       continue;
     }
 
+    const promptItems = remaining.map((item) => {
+      const forbiddenTokens = extractForbiddenTokens(item.badOutput);
+      return forbiddenTokens.length > 0 ? { ...item, forbiddenTokens } : item;
+    });
+
     const prompt = `# Source Language: ${sourceHint}
 # URGENT QUALITY & PRONOUN REPAIR PASS:
-The following subtitle lines FAILED automated Burmese quality or Speaker-Gender Pronoun validation in the previous pass (untranslated Japanese/English, blank output, foreign Unicode glitch such as Ethiopic \`ድ\`, Thai \`ค\`, Lao \`ະ\`, OR wrong speaker gender pronoun such as a male actor using \`ကျွန်မ\`, female actor using \`ခင်ဗျား\`/\`ကျွန်တော်\`, or switching between \`ကျွန်ုပ်\` and \`ကျွန်တော်\`).
+The following subtitle lines FAILED automated Burmese quality or Speaker-Gender Pronoun validation in the previous pass (untranslated Japanese/English, leftover Kanji/Hanzi terms like \`無號機\`, blank output, foreign Unicode glitch such as Ethiopic \`ድ\`, Thai \`ค\`, Lao \`ະ\`, OR wrong speaker gender pronoun such as a male actor using \`ကျွန်မ\`, female actor using \`ခင်ဗျား\`/\`ကျွန်တော်\`, or switching between \`ကျွန်ုပ်\` and \`ကျွန်တော်\`).
 
 YOUR TASK:
 Translate EACH line cleanly and accurately into natural spoken Burmese following the exact system prompt & Episode Lock rules:
-1. NEVER copy or leave source Japanese/Kanji/Kana or ANY non-allowed Unicode scripts (Ethiopic \`ድ\`, Arabic, Thai, Lao, Korean, Indic, Cyrillic, CJK) in "translated" — even if the source line has ASS tags like {\\i1} or quotation marks like "部長"!
-2. Output ONLY pure Myanmar Unicode (\\u1000-\\u109F) plus Basic Latin ASCII/digits & standard punctuation ONLY (use \`…\` for interrupted pauses instead of a single \`. \`; fix any \`{\\i0}{\\i1}\` into \`{\\i1}...{\\i0}\`; ALWAYS spell \`ကတိ\` instead of \`ဂတိ\`).
-3. OBEY "speakerLock" STRICTLY: Male actors NEVER use \`ကျွန်မ/ကျွန်မတို့\`; Female actors NEVER use \`ခင်ဗျား/ကျွန်တော်/ကျွန်တော်တို့\`; NEVER switch self-pronoun between \`ကျွန်ုပ်\` and \`ကျွန်တော်\`.
-4. Translate ALL common English nouns & ranks into Burmese (General -> ဗိုလ်ချုပ်, Crown Prince -> အိမ်ရှေ့မင်းသား, His Majesty -> ဘုရင်မင်းမြတ်, Heaven -> ကောင်းကင်ဘုံ, Boss -> သူဌေး, Devil -> နတ်ဆိုး) and keep proper place roots in English + Burmese suffix (e.g. Guillier ချောက်ကမ်းပါး, Lionel နိုင်ငံတော်, Dacan လွင်ပြင်).
-5. Preserve all ASS tags {\\...} from "originalText". If "isDialogue" is true, output a SINGLE line without \\N line breaks; if "isDialogue" is false (Signs/RPG UI/Text/Title/Lyrics), translate ALL descriptive labels/stats/disclaimers into concise Burmese (only standard short game abbreviations like HP/MP/LV or proper names stay English) and preserve \\N line breaks intact. Never output timecodes or trailing periods (.).
-6. If "isDialogue" is true and "maxChars" is provided, keep Aegisub visible char count <= maxChars. If "maxChars" is omitted, translate naturally without artificial character shortening.
-7. Only return "" if "originalText" is purely a parenthetical SFX/groan note like （ため息）.
+1. NEVER copy or leave source Japanese/Kanji/Hanzi/Kana or ANY non-allowed Unicode scripts (CJK/Kanji \`無號機\`, Hiragana, Katakana, Ethiopic \`ድ\`, Arabic, Thai, Lao, Korean, Indic, Cyrillic) in "translated" — even if the source line has ASS tags like {\\i1}, quotation marks like "部長", or Kanji unit/mecha codenames (translate/romanize \`無号機\`/\`無號機\` as \`Unit 0\`, \`Mugouki\`, or \`နံပါတ်မဲ့ယူနစ်\` — NEVER output CJK/Kanji!).
+2. If "forbiddenTokens" is present on an item, you MUST replace every listed foreign token with natural Burmese or English/Romaji so ZERO forbidden characters remain!
+3. Output ONLY pure Myanmar Unicode (\\u1000-\\u109F) plus Basic Latin ASCII/digits & standard punctuation ONLY (use \`…\` for interrupted pauses instead of a single \`. \`; fix any \`{\\i0}{\\i1}\` into \`{\\i1}...{\\i0}\`; ALWAYS spell \`ကတိ\` instead of \`ဂတိ\`).
+4. OBEY "speakerLock" STRICTLY: Male actors NEVER use \`ကျွန်မ/ကျွန်မတို့\`; Female actors NEVER use \`ခင်ဗျား/ကျွန်တော်/ကျွန်တော်တို့\`; NEVER switch self-pronoun between \`ကျွန်ုပ်\` and \`ကျွန်တော်\`.
+5. Translate ALL common English nouns & ranks into Burmese (General -> ဗိုလ်ချုပ်, Crown Prince -> အိမ်ရှေ့မင်းသား, His Majesty -> ဘုရင်မင်းမြတ်, Heaven -> ကောင်းကင်ဘုံ, Boss -> သူဌေး, Devil -> နတ်ဆိုး) and keep proper place roots in English + Burmese suffix (e.g. Guillier ချောက်ကမ်းပါး, Lionel နိုင်ငံတော်, Dacan လွင်ပြင်).
+6. Preserve all ASS tags {\\...} from "originalText". If "isDialogue" is true, output a SINGLE line without \\N line breaks; if "isDialogue" is false (Signs/RPG UI/Text/Title/Lyrics), translate ALL descriptive labels/stats/disclaimers into concise Burmese (only standard short game abbreviations like HP/MP/LV or proper names stay English) and preserve \\N line breaks intact. Never output timecodes or trailing periods (.).
+7. If "isDialogue" is true and "maxChars" is provided, keep Aegisub visible char count <= maxChars. If "maxChars" is omitted, translate naturally without artificial character shortening.
+8. Only return "" if "originalText" is purely a parenthetical SFX/groan note like （ため息）.
 
 # LINES TO REPAIR:
-${JSON.stringify(remaining)}
+${JSON.stringify(promptItems)}
 
 Return a JSON array of objects with "index" (integer) and "translated" (clean Burmese string).`;
 
@@ -665,7 +671,93 @@ Return a JSON array of objects with "index" (integer) and "translated" (clean Bu
     }
   }
 
-  // Last-resort surgical scrub ONLY if a line already has valid Burmese and just a stray non-Burmese token or pronoun violation
+  // Focused single-line solo repair for any stubborn lines that survived multi-line repair rounds
+  if (remaining.length > 0 && remaining.length <= 15) {
+    const soloRemaining: InvalidLineRepairInput[] = [];
+    for (const item of remaining) {
+      const forbiddenTokens = extractForbiddenTokens(item.badOutput);
+      const soloModel = !rateLimiter?.isDailyExhausted('gemini-3.8-flash')
+        ? 'gemini-3.8-flash'
+        : !rateLimiter?.isDailyExhausted('gemini-4-hydrogen')
+        ? 'gemini-4-hydrogen'
+        : 'gemini-3.1-flash-lite';
+      if (rateLimiter?.isDailyExhausted(soloModel)) {
+        soloRemaining.push(item);
+        continue;
+      }
+
+      const soloPrompt = `# SINGLE-LINE STRICT CLEANUP REPAIR (${sourceHint})
+Translate THIS ONE subtitle line into natural spoken Burmese with ZERO foreign Unicode characters.
+${forbiddenTokens.length > 0 ? `CRITICAL ERROR IN PREVIOUS ATTEMPT: You left foreign tokens ${JSON.stringify(forbiddenTokens)} inside "${item.badOutput}". Replace/translate/romanize EVERY character of ${JSON.stringify(forbiddenTokens)} into Burmese or English/Romaji (e.g. 無号機/無號機 -> Unit 0 or နံပါတ်မဲ့ယူနစ်). DO NOT output any Kanji, Hiragana, Katakana, Hanzi, Korean, Thai, Lao, Ethiopic, or non-Burmese/non-ASCII script!` : `Previous invalid output: "${item.badOutput}" (${item.reason}).`}
+
+Input line:
+${JSON.stringify({
+  index: item.index,
+  actor: item.actor || '',
+  speakerLock: item.speakerLock,
+  isDialogue: item.isDialogue,
+  maxChars: item.maxChars,
+  originalText: item.originalText,
+})}
+
+Return a JSON object with keys "index" (integer) and "translated" (clean Burmese string only).`;
+
+      try {
+        if (rateLimiter) {
+          await rateLimiter.acquireSlot(soloModel);
+        }
+        const soloConfig: Record<string, unknown> = {
+          systemInstruction: `${EXACT_USER_PROMPT}${episodeLockInstruction}`,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              index: { type: Type.INTEGER },
+              translated: { type: Type.STRING },
+            },
+            required: ['index', 'translated'],
+          },
+        };
+        if (soloModel === 'gemini-3.8-flash' || soloModel === 'gemini-4-hydrogen') {
+          soloConfig.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
+        }
+        const { response } = await executeWithSafetyStepDown({
+          runAttempt: async (safetySettings) => {
+            const timeoutPromise = new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`Solo repair (${soloModel}) timed out`)), 45000)
+            );
+            const generatePromise = ai.models.generateContent({
+              model: soloModel,
+              contents: soloPrompt,
+              config: { ...soloConfig, safetySettings },
+            });
+            return Promise.race([generatePromise, timeoutPromise]);
+          },
+        });
+        rateLimiter?.recordSuccess(soloModel);
+        const parsedSolo: { index?: number; translated?: string } = JSON.parse(response.text || '{}');
+        const candidate = typeof parsedSolo.translated === 'string' ? parsedSolo.translated : undefined;
+        if (
+          candidate !== undefined &&
+          validateTranslatedLine(item.originalText, candidate).valid &&
+          detectSpeakerPronounViolation(item.actor || '', candidate, episodeLock).valid
+        ) {
+          repairedMap.set(item.index, candidate);
+          continue;
+        }
+        soloRemaining.push(
+          candidate !== undefined ? { ...item, badOutput: candidate } : item
+        );
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        rateLimiter?.recordError(soloModel, errMsg);
+        soloRemaining.push(item);
+      }
+    }
+    remaining = soloRemaining;
+  }
+
+  // Last-resort surgical scrub ONLY if a line already has valid Burmese and just a stray non-Burmese/Kanji token or pronoun violation
   for (const leftover of remaining) {
     let scrubbed = stripStrayNonBurmeseTokensIfBurmesePresent(leftover.badOutput);
     scrubbed = applyDeterministicSpeakerPronounFix(leftover.actor || '', scrubbed, episodeLock);
@@ -739,7 +831,7 @@ ${dialogueCpsRule}
 ၆။ ဘာသာစကား သန့်ရှင်းမှု & အင်္ဂလိပ်စကားလုံး အပြည့်အစုံ ဘာသာပြန်ခြင်း (STRICT LANGUAGE PURITY):
    - မူရင်း ဂျပန်/အင်္ဂလိပ်စာသားများကို ဘာသာမပြန်ဘဲ လုံးဝ မချန်ထားရ ({\\i1} ကဲ့သို့ ASS Tag များ သို့မဟုတ် "..." မျက်တောင်အဖွင့်အပိတ်များ ပါနေသော်လည်း စာသားအားလုံးကို မြန်မာလို အပြည့်အစုံ ပြန်ပေးရမည်)။
    - ဇာတ်ကောင်နာမည် (Character Name) / နေရာနာမည်ရင်း သို့မဟုတ် HP/MP/LV ကဲ့သို့ Game stat tag များမှလွဲ၍ Heaven, Boss, Devil, Master, Princess, Monster, Guild, Wedding, Promise စသည့် သာမန်အင်္ဂလိပ် စကားလုံးများကို အင်္ဂလိပ်လို မချန်ဘဲ မြန်မာလို အပြည့်အစုံ (ဥပမာ - ကောင်းကင်ဘုံ, သူဌေး/ခေါင်းဆောင်, နတ်ဆိုး/မိစ္ဆာ) ဘာသာပြန်ပေးရမည်။
-   - မြန်မာစာထဲတွင် အီသီယိုးပီးယား (ဥပမာ ድ), ထိုင်း (ค), လာအို (ະ), အာရပ်, ကိုရီးယား, ဟိန္ဒီ, ရုရှား, သို့မဟုတ် ဂျပန်/တရုတ် စာလုံးများ လုံးဝ မရောထည့်ရ။ Allowed scripts (မြန်မာ Unicode \\u1000-\\u109F + Basic Latin ASCII + digits + standard punctuation) ကိုသာ ထုတ်ပေးရမည်။
+   - မြန်မာစာထဲတွင် အီသီယိုးပီးယား (ဥပမာ ድ), ထိုင်း (ค), လာအို (ະ), အာရပ်, ကိုရီးယား, ဟိန္ဒီ, ရုရှား, သို့မဟုတ် ဂျပန်/တရုတ် Kanji/Hanzi/Kana စာလုံးများ (ဥပမာ \`無號機\`, \`無号機\`) လုံးဝ မရောထည့်ရ။ Kanji ဖြင့် ရေးထားသော Unit/Mecha/ကုဒ်နာမည်များကို "Unit 0", "Mugouki" သို့မဟုတ် "နံပါတ်မဲ့ယူနစ်" ဟု အင်္ဂလိပ်/မြန်မာလို ပြောင်းရေးပါ။ Allowed scripts (မြန်မာ Unicode \\u1000-\\u109F + Basic Latin ASCII + digits + standard punctuation) ကိုသာ ထုတ်ပေးရမည်။
    - စာလုံးပေါင်း မှန်ကန်စေရန် "ကတိ" ကို "ဂတိ" ဟု မှားမရေးရ (တကယ် ကို တစ်ကယ် ဟု မရေးရ)။
 ၇။ SPEAKER-GENDER STRICT PRONOUN LOCK & PLACE/RANK CONSISTENCY:
    - Line တစ်ခုချင်းစီရှိ "actor" နှင့် "speakerLock" ကို အတိအကျ စစ်ဆေးပါ — ယောက်ျားလေး Actor (MALE) သည် "ကျွန်မ / ကျွန်မတို့" လုံးဝ မသုံးရ၊ မိန်းကလေး Actor (FEMALE) သည် "ခင်ဗျား / ကျွန်တော် / ကျွန်တော်တို့" လုံးဝ မသုံးရ။ Character တစ်ဦးတည်းတွင် "ကျွန်ုပ်" နှင့် "ကျွန်တော်" ရောမသုံးဘဲ Lock ချထားသော Self-Pronoun တစ်မျိုးတည်းသာ သုံးပါ။
@@ -1616,6 +1708,22 @@ async function runSubtitleTranslationPipeline(
     statusMessage: 'Rebuilding ASS subtitle file and verifying all formatting tags...',
     percent: 96,
   });
+
+  // Final safety sweep before building .ass so ZERO foreign/CJK/Kanji tokens survive into Burmese output lines
+  for (const origEvent of translatableEvents) {
+    const currentText = translatedMap.get(origEvent.index);
+    if (!currentText) continue;
+    if (detectForbiddenScripts(currentText).hasForbidden) {
+      const scrubbed = stripStrayNonBurmeseTokensIfBurmesePresent(currentText);
+      if (scrubbed !== currentText && !detectForbiddenScripts(scrubbed).hasForbidden && scrubbed.trim().length > 0) {
+        const isSign = isSignOrTitle(origEvent.name, origEvent.style, origEvent.text);
+        const reconcileSource = getReconcileSource(origEvent.text, isSign);
+        const normalized = reconcileTags(reconcileSource, scrubbed, { preserveLineBreaks: isSign });
+        console.warn(`[pipeline] Final foreign-script scrub on line ${origEvent.index}: "${currentText}" -> "${normalized}"`);
+        translatedMap.set(origEvent.index, normalized);
+      }
+    }
+  }
 
   unifyNearbyDuplicateTranslations(parsedData.events, translatedMap, nearbyDuplicateClusters);
 

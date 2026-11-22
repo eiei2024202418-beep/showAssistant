@@ -14,6 +14,8 @@ import {
   findNearbyDuplicateClusters,
   unifyNearbyDuplicateTranslations,
   detectForbiddenScripts,
+  extractForbiddenTokens,
+  stripStrayForbiddenChars,
   validateTranslatedLine,
   detectSeasonNumber,
   extractEpisodeNumber,
@@ -172,13 +174,22 @@ test('mapStyleName correctly applies user style mapping rules', () => {
   assert.equal(mapStyleName('Q2'), 'Myanmar2');
   assert.equal(mapStyleName('Q6'), 'Myanmar2');
   assert.equal(mapStyleName('s7'), 'Myanmar2');
+  assert.equal(mapStyleName('Font2_OutlineShadow'), 'Myanmar2');
+  assert.equal(mapStyleName('Font1_OutlineShadow'), 'Myanmar1');
+  assert.equal(isSignOrTitle('', 'Font1_OutlineShadow', 'Dialogue line'), false);
+  assert.equal(isSignOrTitle('', 'Font2_OutlineShadow', 'Italic dialogue'), false);
+  assert.equal(isSignOrTitle('', 'Font1', 'Sign text'), true);
 
   assert.equal(mapStyleName('Flashback'), 'Myanmar3');
+  assert.equal(mapStyleName('Main - Flashback'), 'Myanmar3');
+  assert.equal(mapStyleName('main - flashback'), 'Myanmar3');
   assert.equal(mapStyleName('Flashback Italics'), 'Myanmar31');
+  assert.equal(mapStyleName('Main - Flashback Italics'), 'Myanmar31');
 
   assert.equal(mapStyleName('Sign_Title'), 'Sign_Basic');
   assert.equal(mapStyleName('Signs'), 'Sign_Basic');
   assert.equal(mapStyleName('Layer1_Font1'), 'Sign_Basic');
+  assert.equal(mapStyleName('Font1'), 'Sign_Basic');
   assert.equal(mapStyleName('Q9'), 'Sign_Basic');
   assert.equal(mapStyleName('Q8'), 'Sign_Basic');
   assert.equal(mapStyleName('Q3'), 'Sign_Basic');
@@ -463,6 +474,37 @@ test('extractEpisodeNumber parses episode numbers cleanly while ignoring resolut
   assert.equal(extractEpisodeNumber('[SubsPlease] Hotel Inhumans S02E12 (1080p).srt'), '12');
   assert.equal(extractEpisodeNumber('Tougen Anki - Nikko Kegon no Taki-hen - 03v2 [1080p].ass'), '3');
   assert.equal(extractEpisodeNumber('Yasei no Last Boss ga Arawareta - Episode 11.ass'), '11');
+
+  // Yasei no Last Boss ga Arawareta! 2nd continuous numbering (13..24 -> Season 2 Ep 1..12)
+  assert.equal(detectSeasonNumber('[Erai-raws] Yasei no Last Boss ga Arawareta! - 13 [1080p].ass'), 2);
+  assert.equal(extractEpisodeNumber('[Erai-raws] Yasei no Last Boss ga Arawareta! - 13 [1080p].ass'), '1');
+  assert.equal(extractEpisodeNumber('Yasei no Last Boss ga Arawareta! 2nd - 21 [1080p CR WEBRip].ass'), '9');
+  assert.equal(extractEpisodeNumber('A Wild Last Boss Appeared! - 24.ass'), '12');
+
+  // Exact user-reported Bug 2: trailing .jpn / .eng / .forced / track tags after [hash] must still detect Episode 8
+  assert.equal(
+    extractEpisodeNumber('[Erai-raws] Tank Chair - 08 [1080p AMZN WEB-DL AVC EAC3][MultiSub][D86EA8EA].jpn.translated.ass'),
+    '8'
+  );
+  assert.equal(
+    extractEpisodeNumber('[Erai-raws] Tank Chair - 08 [1080p AMZN WEB-DL AVC EAC3][MultiSub][D86EA8EA].jpn.ass'),
+    '8'
+  );
+  assert.equal(
+    extractEpisodeNumber('[Erai-raws] Tank Chair - 08 [1080p].eng.forced.translated.srt'),
+    '8'
+  );
+  assert.equal(
+    extractEpisodeNumber('[SubsPlease] Tank Chair - 08 - The Awakening [1080p].jpn.ass'),
+    '8'
+  );
+  assert.equal(
+    extractEpisodeNumber('Tank.Chair.08.1080p.AMZN.WEB-DL.DDP2.0.H.264.jpn.ass'),
+    '8'
+  );
+  assert.equal(extractEpisodeNumber('Tank Chair 第08話 [1080p].jpn.ass'), '8');
+  assert.equal(extractEpisodeNumber('[Erai-raws] 86 - 08 [1080p].jpn.ass'), '8');
+  assert.equal(detectSeasonNumber('[Erai-raws] Tank Chair - 08 [1080p AMZN WEB-DL AVC EAC3][MultiSub][D86EA8EA].jpn.ass'), 1);
 });
 
 test('buildWatermarkEvents inserts 4 NaJu Anime header lines with dynamic Season, Episode, and spoken dialogue End time', () => {
@@ -486,7 +528,8 @@ Dialogue: 0,0:00:05.50,0:00:08.00,DefaultItalics,Hero,0,0,0,,တွေးနေ�
 
   const parsed = parseAss(assSample);
   assert.equal(hasWatermarkEvents(parsed.events), false);
-  assert.equal(getFirstSpokenDialogueStart(parsed.events), '0:00:02.34');
+  // Uses very first visible subtitle line regardless of whether it is Signs/Title or Dialogue
+  assert.equal(getFirstSpokenDialogueStart(parsed.events), '0:00:00.50');
 
   const fileName = '[Erai-raws] Koori no Jouheki 2nd Season - 07 [1080p].ass';
   const watermark = buildWatermarkEvents(fileName, parsed.events);
@@ -515,13 +558,13 @@ Dialogue: 0,0:00:05.50,0:00:08.00,DefaultItalics,Hero,0,0,0,,တွေးနေ�
   assert.equal(reparsed.events[2].style, 'CreditStyle');
   assert.equal(reparsed.events[2].layer, '2');
   assert.equal(reparsed.events[2].start, '0:00:00.00');
-  assert.equal(reparsed.events[2].end, '0:00:02.34');
+  assert.equal(reparsed.events[2].end, '0:00:00.50');
   assert.ok(reparsed.events[2].text.includes('TLC & Encoder : {\\c&H00D7FF&}NaJu'));
 
   assert.equal(reparsed.events[3].style, 'MarqueeStyle');
   assert.equal(reparsed.events[3].layer, '3');
   assert.equal(reparsed.events[3].start, '0:00:00.00');
-  assert.equal(reparsed.events[3].end, '0:00:02.34');
+  assert.equal(reparsed.events[3].end, '0:00:00.50');
   assert.ok(reparsed.events[3].text.includes('https://t.me/NaJu_NewAnime'));
 
   // Verify original events mapped styles correctly after prepended 4 lines
@@ -532,6 +575,41 @@ Dialogue: 0,0:00:05.50,0:00:08.00,DefaultItalics,Hero,0,0,0,,တွေးနေ�
   const validation = validateAss(parsed, built, watermark.length);
   assert.equal(validation.valid, true);
   assert.equal(validation.eventCount, parsed.events.length + 4);
+});
+
+test('isSignOrTitle avoids substring false positives on character names (FRIEDRICH) and CreditStyle/MarqueeStyle always use first line start time', () => {
+  // Character names containing 'ed'/'op'/'card' substrings must NOT trigger isSignOrTitle
+  assert.equal(isSignOrTitle('FRIEDRICH', 'Main - Flashback', 'Even if you run alone...'), false);
+  assert.equal(isSignOrTitle('EDWARD', 'Default', 'Wait for me!'), false);
+  assert.equal(isSignOrTitle('SOPHIA', 'Default', 'Let us go!'), false);
+  assert.equal(isSignOrTitle('RICHARD', 'Default', 'Yes.'), false);
+  assert.equal(isSignOrTitle('ARMED GUARD', 'Default', 'Stop!'), false);
+
+  // Explicit token sign actors still trigger isSignOrTitle
+  assert.equal(isSignOrTitle('EPTITLE', 'Default', 'Episode 8'), true);
+  assert.equal(isSignOrTitle('OP', 'Default', 'Opening lyrics'), true);
+  assert.equal(isSignOrTitle('ED1', 'Default', 'Ending lyrics'), true);
+
+  // Exact screenshot repro: Line 1 is FRIEDRICH at 0:00:02.91, Line 2 is CHRIS at 0:00:04.93
+  const screenshotRepro = `[Script Info]
+Title: Repro
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Main - Flashback,Arial,40,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,20,20,20,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:02.91,0:00:04.93,Main - Flashback,FRIEDRICH,0,0,0,,မင်းတစ်ယောက်တည်းဖြစ်ရင်တောင် ထွက်ပြေးရမယ်
+Dialogue: 0,0:00:04.93,0:00:07.15,Main - Flashback,CHRIS,0,0,0,,ဒါပေမဲ့… မေမေ…
+`;
+  const parsed = parseAss(screenshotRepro);
+  const watermark = buildWatermarkEvents('Series - 08.ass', parsed.events);
+  const credit = watermark.find((e) => e.style === 'CreditStyle')!;
+  const marquee = watermark.find((e) => e.style === 'MarqueeStyle')!;
+  assert.equal(credit.end, '0:00:02.91');
+  assert.equal(marquee.end, '0:00:02.91');
 });
 
 test('buildAss converts Style to Sign_Basic whenever Actor contains Sign or Text', () => {
@@ -776,4 +854,23 @@ test('fixCommonBurmeseSpelling & reconcileTags fix "ဂတိ" -> "ကတိ" wh
   assert.equal(reconcileTags('Really?', 'တစ်ကယ်လား', { preserveLineBreaks: false }), 'တကယ်လား');
   assert.equal(reconcileTags('I am fine.', 'ကျွှန်တော် အဆင်ပြေတယ်', { preserveLineBreaks: false }), 'ကျွန်တော် အဆင်ပြေတယ်');
 });
+
+test('Foreign script guard catches and strips exact CJK/Kanji leak (無號機) while preserving ASS tags & Burmese', () => {
+  const leaked = '無號機 မလွဲပြီး တခြားမရှိတော့ဘူးလား';
+  const detected = detectForbiddenScripts(leaked);
+  assert.equal(detected.hasForbidden, true);
+  assert.ok(detected.scripts.includes('CJK / Kanji'));
+  assert.deepEqual(extractForbiddenTokens(leaked), ['無號機']);
+  assert.equal(validateTranslatedLine('無号機しか残ってないのか', leaked).valid, false);
+
+  // Last-resort stripStrayForbiddenChars removes CJK/JP/fullwidth/Korean/Thai/Lao while preserving {\i1} tags & \N
+  assert.equal(stripStrayForbiddenChars(leaked), 'မလွဲပြီး တခြားမရှိတော့ဘူးလား');
+  assert.equal(
+    stripStrayForbiddenChars('{\\i1}無號機 မလွဲပြီး\\Nတခြားမရှိတော့ဘူးလား{\\i0}'),
+    '{\\i1}မလွဲပြီး\\Nတခြားမရှိတော့ဘူးလား{\\i0}'
+  );
+  assert.equal(detectForbiddenScripts(stripStrayForbiddenChars(leaked)).hasForbidden, false);
+  assert.equal(detectForbiddenScripts('စမ်းသပ်！？　テスト').hasForbidden, true);
+});
+
 

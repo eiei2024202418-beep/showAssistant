@@ -6,7 +6,7 @@
  * - Provides deterministic validation and fallback enforcement so pronouns/glossary never drift across batches.
  */
 
-import type { AssEvent } from './subtitleParser';
+import { detectForbiddenScripts, type AssEvent } from './subtitleParser';
 
 export type SpeakerGender = 'male' | 'female' | 'unknown';
 
@@ -230,10 +230,18 @@ export function sanitizeEpisodeLockProfile(raw: unknown): EpisodeLockProfile {
       const gender = normalizeGender(rec.gender);
       const rawSelf = typeof rec.fixedSelfPronoun === 'string' ? rec.fixedSelfPronoun.trim() : '';
       const rawPlural = typeof rec.fixedPluralPronoun === 'string' ? rec.fixedPluralPronoun.trim() : '';
-      const fixedSelfPronoun = normalizeFixedSelfPronoun(rawSelf, gender);
+      let fixedSelfPronoun = normalizeFixedSelfPronoun(rawSelf, gender);
       if (!fixedSelfPronoun) continue;
+      if (detectForbiddenScripts(fixedSelfPronoun).hasForbidden) {
+        if (gender === 'male') fixedSelfPronoun = 'ကျွန်တော်';
+        else if (gender === 'female') fixedSelfPronoun = 'ကျွန်မ';
+        else continue;
+      }
 
-      const fixedPluralPronoun = derivePluralPronoun(rawPlural, fixedSelfPronoun, gender);
+      let fixedPluralPronoun = derivePluralPronoun(rawPlural, fixedSelfPronoun, gender);
+      if (detectForbiddenScripts(fixedPluralPronoun).hasForbidden) {
+        fixedPluralPronoun = `${fixedSelfPronoun}တို့`;
+      }
       const toneNote = typeof rec.toneNote === 'string' ? rec.toneNote.trim() : undefined;
 
       speakerProfiles.push({
@@ -257,7 +265,7 @@ export function sanitizeEpisodeLockProfile(raw: unknown): EpisodeLockProfile {
       const listener = typeof rec.listener === 'string' ? rec.listener.trim() : 'General';
       const pronouns = typeof rec.pronouns === 'string' ? rec.pronouns.trim() : '';
       const toneNote = typeof rec.toneNote === 'string' ? rec.toneNote.trim() : undefined;
-      if (!speaker || !pronouns) continue;
+      if (!speaker || !pronouns || detectForbiddenScripts(pronouns).hasForbidden) continue;
       const key = `${speaker.toLowerCase()}->${listener.toLowerCase()}`;
       if (seenPairs.has(key)) continue;
       seenPairs.add(key);
@@ -284,7 +292,8 @@ export function sanitizeEpisodeLockProfile(raw: unknown): EpisodeLockProfile {
         cat === 'title' || cat === 'character' || cat === 'place' || cat === 'rank' || cat === 'term'
           ? cat
           : undefined;
-      if (!sourceTerm || !burmeseTerm) continue;
+      // Never lock a glossary translation that still contains Kanji/Kana/CJK/Thai/Lao/foreign scripts
+      if (!sourceTerm || !burmeseTerm || detectForbiddenScripts(burmeseTerm).hasForbidden) continue;
       const key = sourceTerm.toLowerCase();
       if (seenTerms.has(key)) continue;
       seenTerms.add(key);
@@ -541,6 +550,7 @@ export function enforceLockedGlossaryPostProcess(
       const src = g.sourceTerm.trim();
       const dst = g.burmeseTerm.trim();
       if (!src || !dst || src.toLowerCase() === dst.toLowerCase()) return false;
+      if (detectForbiddenScripts(dst).hasForbidden) return false;
       const isMultiWord = /\s/.test(src);
       const isLockedRankOrPlaceWord =
         (g.category === 'rank' || g.category === 'place') && src.length >= 6 && /^[A-Z]/.test(src);

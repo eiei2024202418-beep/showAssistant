@@ -151,3 +151,38 @@ test('detectSpeakerPronounViolation & applyDeterministicSpeakerPronounFix preven
     'အိမ်ရှေ့မင်းသား က ဗိုလ်ချုပ် နဲ့ Guillier ချောက်ကမ်းပါး ကို သွားတယ်'
   );
 });
+
+test('sanitizeEpisodeLockProfile & enforceLockedGlossaryPostProcess reject glossary/pronoun entries with Kanji/CJK/foreign scripts', () => {
+  const poisoned = sanitizeEpisodeLockProfile({
+    speakerProfiles: [
+      { actor: 'Hero', gender: 'male', fixedSelfPronoun: 'ကျွန်တော်', fixedPluralPronoun: 'ကျွန်တော်တို့' },
+    ],
+    pronounLocks: [
+      { speaker: 'A', listener: 'B', pronouns: 'ငါ / 俺' }, // Japanese Kanji must be rejected
+      { speaker: 'C', listener: 'D', pronouns: 'ကိုယ် / မင်း' },
+    ],
+    glossaryTerms: [
+      { sourceTerm: '無号機', burmeseTerm: '無號機', category: 'term' }, // Kanji leak must be rejected
+      { sourceTerm: 'Zero Unit', burmeseTerm: 'Unit 0', category: 'term' }, // Valid ASCII allowed
+      { sourceTerm: 'Devil', burmeseTerm: 'နတ်ဆိုး', category: 'term' },
+    ],
+  });
+
+  assert.equal(poisoned.pronounLocks.length, 1);
+  assert.equal(poisoned.pronounLocks[0].speaker, 'C');
+  assert.equal(poisoned.glossaryTerms.length, 2);
+  assert.ok(!poisoned.glossaryTerms.some((g) => g.burmeseTerm === '無號機'));
+
+  // Even if a pre-sanitized profile object somehow contains Kanji in burmeseTerm, enforceLockedGlossaryPostProcess skips it
+  const unsafeManualProfile: EpisodeLockProfile = {
+    pronounLocks: [],
+    glossaryTerms: [
+      { sourceTerm: 'Unit Zero', burmeseTerm: '無號機', category: 'term' },
+      { sourceTerm: 'Crown Prince', burmeseTerm: 'အိမ်ရှေ့မင်းသား', category: 'rank' },
+    ],
+  };
+  assert.equal(
+    enforceLockedGlossaryPostProcess('Unit Zero နဲ့ Crown Prince ရောက်လာပြီ', unsafeManualProfile),
+    'Unit Zero နဲ့ အိမ်ရှေ့မင်းသား ရောက်လာပြီ'
+  );
+});
