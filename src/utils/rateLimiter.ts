@@ -116,7 +116,7 @@ export class ModelRateLimiter {
     } else if (classified.isTransientUnavailable) {
       const streak = (this.consecutiveUnavailable.get(model) ?? 0) + 1;
       this.consecutiveUnavailable.set(model, streak);
-      const waitMs = streak === 1 ? 6000 : streak === 2 ? 12000 : 20000;
+      const waitMs = streak === 1 ? 5000 : streak === 2 ? 10000 : 15000;
       this.cooldownKind.set(model, 'high-demand');
       this.cooldownUntil.set(model, Math.max(this.cooldownUntil.get(model) ?? 0, now + waitMs));
     }

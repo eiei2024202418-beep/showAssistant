@@ -9,6 +9,35 @@ export interface SplitBatchOptions<TItem, TResult> {
 }
 
 /**
+ * Returns true if the error is a transient overload/timeout/omission failure that benefits from smaller chunks.
+ */
+export function isTransientBatchFailure(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const classified = classifyApiError(msg);
+  if (classified.isDailyQuotaExhausted) return false;
+  return (
+    classified.isTransientUnavailable ||
+    classified.isRateLimit ||
+    /timed out|omitted index|empty or invalid array/i.test(msg)
+  );
+}
+
+/**
+ * When a large batch (>= minSplitSize * 2) fails across >= 2 distinct models due to timeouts or 503 overload,
+ * fast-failing out of the batch retry loop lets executeBatchWithAutoSplit halve it immediately instead of stalling.
+ */
+export function shouldFastSplitLargeBatch(
+  batchLength: number,
+  failedDistinctModels: number,
+  lastErr: unknown,
+  minSplitSize = 5
+): boolean {
+  if (batchLength < minSplitSize * 2) return false;
+  if (failedDistinctModels < 2) return false;
+  return isTransientBatchFailure(lastErr);
+}
+
+/**
  * Determines whether a failed batch error is worth retrying by splitting the batch
  * into smaller halves (e.g. timeouts, 503 overload, truncated JSON, omitted index),
  * vs immediately propagating non-splittable errors (Daily Quota Exceeded or Safety Block).

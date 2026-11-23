@@ -168,6 +168,7 @@ test('mapStyleName correctly applies user style mapping rules', () => {
 
   assert.equal(mapStyleName('Italics'), 'Myanmar2');
   assert.equal(mapStyleName('Main - Italics'), 'Myanmar2');
+  assert.equal(mapStyleName('Italics - Isekai'), 'Myanmar2');
   assert.equal(mapStyleName('DefaultItalics'), 'Myanmar2');
   assert.equal(mapStyleName('ED Lyrics White'), 'Myanmar2');
   assert.equal(mapStyleName('ED Lyrics White - Eng'), 'Myanmar2');

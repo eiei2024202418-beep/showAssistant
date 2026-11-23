@@ -33,6 +33,8 @@ import {
   clearCheckpoint,
   mergeCheckpointPreviewItems,
   getCheckpointTranslatedCount,
+  classifyAutoResumeError,
+  getAutoResumeDelaySec,
   type TranslationCheckpoint,
 } from './utils/checkpoint';
 
@@ -59,6 +61,13 @@ export default function App() {
 
   // Auto-Save Checkpoint State
   const [savedCheckpoint, setSavedCheckpoint] = useState<TranslationCheckpoint | null>(null);
+  const [autoRetryState, setAutoRetryState] = useState<{
+    countdownSec: number;
+    attempt: number;
+    maxAttempts: number;
+    reasonLabel: string;
+    checkpoint: TranslationCheckpoint | null;
+  } | null>(null);
 
   // Results
   const [translatedAss, setTranslatedAss] = useState<string>('');
@@ -69,13 +78,28 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoRetryTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoRetryAttemptRef = useRef<number>(0);
 
-  // Restore any unfinished checkpoint on initial page load
+  const cancelAutoRetry = () => {
+    if (autoRetryTimerRef.current) {
+      clearInterval(autoRetryTimerRef.current);
+      autoRetryTimerRef.current = null;
+    }
+    setAutoRetryState(null);
+  };
+
+  // Restore any unfinished checkpoint on initial page load & clean up retry timer on unmount
   useEffect(() => {
     const latest = findLatestCheckpoint();
     if (latest) {
       setSavedCheckpoint(latest);
     }
+    return () => {
+      if (autoRetryTimerRef.current) {
+        clearInterval(autoRetryTimerRef.current);
+      }
+    };
   }, []);
 
   // Manage elapsed timer
@@ -112,6 +136,8 @@ export default function App() {
       return;
     }
 
+    cancelAutoRetry();
+    autoRetryAttemptRef.current = 0;
     setErrorMessage('');
     setFile({ name, size, content });
     setStatus('idle');
@@ -182,6 +208,8 @@ export default function App() {
   };
 
   const handleDiscardCheckpoint = (cp: TranslationCheckpoint) => {
+    cancelAutoRetry();
+    autoRetryAttemptRef.current = 0;
     clearCheckpoint(cp.signature);
     if (currentFileSignature && cp.signature === currentFileSignature) {
       setPreviewItems([]);
@@ -195,7 +223,13 @@ export default function App() {
   const startTranslation = async (options?: {
     resumeFrom?: TranslationCheckpoint | null;
     forceRestart?: boolean;
+    isAutoRetry?: boolean;
   }) => {
+    cancelAutoRetry();
+    if (!options?.isAutoRetry) {
+      autoRetryAttemptRef.current = 0;
+    }
+
     const resumeTarget = options?.forceRestart
       ? null
       : options?.resumeFrom !== undefined
@@ -371,6 +405,9 @@ export default function App() {
               }
             } else if (eventData.type === 'batch_complete') {
               if (eventData.preview && Array.isArray(eventData.preview)) {
+                if (eventData.preview.length > 0) {
+                  autoRetryAttemptRef.current = 0;
+                }
                 accumulatedPreview = mergeCheckpointPreviewItems(accumulatedPreview, eventData.preview);
                 for (const item of eventData.preview as PreviewItem[]) {
                   if (typeof item.index === 'number' && typeof item.translated === 'string') {
@@ -416,6 +453,8 @@ export default function App() {
       const savedCount = getCheckpointTranslatedCount(savedCp);
 
       if ((err as Error)?.name === 'AbortError') {
+        cancelAutoRetry();
+        autoRetryAttemptRef.current = 0;
         setStatus('idle');
         setStatusMessage(
           savedCount > 0
@@ -425,16 +464,62 @@ export default function App() {
       } else {
         setStatus('error');
         const baseErr = err instanceof Error ? err.message : 'Unknown translation failure.';
+        const MAX_AUTO_RESUMES = 6;
+        const { shouldAutoRetry, reasonLabel } = classifyAutoResumeError(baseErr);
+        const currentAttempt = autoRetryAttemptRef.current;
+        const canAutoRetry = shouldAutoRetry && currentAttempt < MAX_AUTO_RESUMES;
+
         setErrorMessage(
           savedCount > 0
-            ? `${baseErr} (Auto-saved ${savedCount}/${knownTranslatableCount || '?'} lines to checkpoint — click Resume to continue from where it stopped.)`
+            ? `${baseErr} (Auto-saved ${savedCount}/${knownTranslatableCount || '?'} lines to checkpoint${
+                canAutoRetry
+                  ? ' — auto-resuming shortly.'
+                  : ' — click Resume to continue from where it stopped.'
+              })`
             : baseErr
         );
+
+        if (canAutoRetry) {
+          const delaySec = getAutoResumeDelaySec(currentAttempt);
+          const nextAttempt = currentAttempt + 1;
+          autoRetryAttemptRef.current = nextAttempt;
+
+          const retryCheckpoint: TranslationCheckpoint | null = savedCp ?? null;
+          let remaining = delaySec;
+          setAutoRetryState({
+            countdownSec: remaining,
+            attempt: nextAttempt,
+            maxAttempts: MAX_AUTO_RESUMES,
+            reasonLabel,
+            checkpoint: retryCheckpoint,
+          });
+
+          autoRetryTimerRef.current = setInterval(() => {
+            remaining -= 1;
+            if (remaining <= 0) {
+              if (autoRetryTimerRef.current) {
+                clearInterval(autoRetryTimerRef.current);
+                autoRetryTimerRef.current = null;
+              }
+              setAutoRetryState(null);
+              startTranslation({
+                resumeFrom: retryCheckpoint ?? undefined,
+                isAutoRetry: true,
+              });
+            } else {
+              setAutoRetryState((prev) =>
+                prev ? { ...prev, countdownSec: remaining } : null
+              );
+            }
+          }, 1000);
+        }
       }
     }
   };
 
   const handleCancel = () => {
+    cancelAutoRetry();
+    autoRetryAttemptRef.current = 0;
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       setStatus('idle');
@@ -928,23 +1013,64 @@ export default function App() {
 
         {/* Error Alert */}
         {errorMessage && (
-          <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-800/60 text-rose-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div
+            className={`p-4 rounded-xl border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+              autoRetryState
+                ? 'bg-amber-950/35 border-amber-700/60 text-amber-100'
+                : 'bg-rose-950/40 border-rose-800/60 text-rose-200'
+            }`}
+          >
             <div className="flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+              {autoRetryState ? (
+                <RefreshCw className="w-5 h-5 text-amber-400 animate-spin shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+              )}
               <div className="space-y-1">
-                <div className="font-semibold text-rose-300">Translation Notice</div>
-                <div>{errorMessage}</div>
+                <div className={`font-semibold ${autoRetryState ? 'text-amber-300' : 'text-rose-300'}`}>
+                  {autoRetryState
+                    ? `Temporary API Spike (${autoRetryState.reasonLabel}) — Auto-Resuming in ${autoRetryState.countdownSec}s (Attempt ${autoRetryState.attempt}/${autoRetryState.maxAttempts})`
+                    : 'Translation Notice'}
+                </div>
+                <div className="text-slate-200/90">{errorMessage}</div>
               </div>
             </div>
-            {matchingCheckpoint && status !== 'translating' && (
-              <button
-                type="button"
-                onClick={() => startTranslation({ resumeFrom: matchingCheckpoint })}
-                className="px-3.5 py-2 rounded-lg font-semibold text-xs text-white bg-emerald-600 hover:bg-emerald-500 transition flex items-center justify-center gap-1.5 shrink-0"
-              >
-                <Play className="w-3.5 h-3.5 fill-current" />
-                Resume Now
-              </button>
+
+            {autoRetryState ? (
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() =>
+                    startTranslation({
+                      resumeFrom: autoRetryState.checkpoint ?? matchingCheckpoint ?? undefined,
+                      isAutoRetry: true,
+                    })
+                  }
+                  className="px-3.5 py-2 rounded-lg font-semibold text-xs text-white bg-emerald-600 hover:bg-emerald-500 transition flex items-center justify-center gap-1.5"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  Resume Now
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelAutoRetry}
+                  className="px-3 py-2 rounded-lg font-medium text-xs text-slate-200 bg-slate-800/80 hover:bg-slate-700 border border-slate-700 transition"
+                >
+                  Stop Auto-Retry
+                </button>
+              </div>
+            ) : (
+              matchingCheckpoint &&
+              status !== 'translating' && (
+                <button
+                  type="button"
+                  onClick={() => startTranslation({ resumeFrom: matchingCheckpoint })}
+                  className="px-3.5 py-2 rounded-lg font-semibold text-xs text-white bg-emerald-600 hover:bg-emerald-500 transition flex items-center justify-center gap-1.5 shrink-0"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  Resume Now
+                </button>
+              )
             )}
           </div>
         )}

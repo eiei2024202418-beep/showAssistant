@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { executeBatchWithAutoSplit, shouldAutoSplitOnBatchError } from './batchResilience';
+import {
+  executeBatchWithAutoSplit,
+  shouldAutoSplitOnBatchError,
+  isTransientBatchFailure,
+  shouldFastSplitLargeBatch,
+} from './batchResilience';
 import { SafetyBlockError } from './safetyStepDown';
 
 test('shouldAutoSplitOnBatchError allows split on timeout/overload for large batches and blocks split on daily quota or safety block', () => {
@@ -61,4 +66,37 @@ test('executeBatchWithAutoSplit immediately propagates daily quota error without
   );
 
   assert.equal(calls, 1);
+});
+
+test('isTransientBatchFailure & shouldFastSplitLargeBatch trigger early split on >=10 lines across >=2 failed models', () => {
+  assert.equal(isTransientBatchFailure(new Error('503 UNAVAILABLE high demand')), true);
+  assert.equal(isTransientBatchFailure(new Error('Model gemini-3.8-flash timed out after 75s')), true);
+  assert.equal(isTransientBatchFailure(new Error('429 RequestsPerDay exceeded')), false);
+
+  assert.equal(shouldFastSplitLargeBatch(20, 1, new Error('503 UNAVAILABLE'), 5), false);
+  assert.equal(shouldFastSplitLargeBatch(20, 2, new Error('503 UNAVAILABLE'), 5), true);
+  assert.equal(shouldFastSplitLargeBatch(9, 2, new Error('timed out'), 5), false);
+  assert.equal(shouldFastSplitLargeBatch(20, 2, new Error('429 RequestsPerDay exceeded'), 5), false);
+});
+
+test('executeBatchWithAutoSplit cascades 20 -> 10+10 -> 5+5 with minSplitSize=5', async () => {
+  const input = Array.from({ length: 20 }, (_, i) => i + 1);
+  const splitLogs: string[] = [];
+
+  const result = await executeBatchWithAutoSplit<number, number>({
+    batch: input,
+    minSplitSize: 5,
+    onSplit: (orig, f, s) => splitLogs.push(`${orig}->${f}+${s}`),
+    translateFn: async (sub) => {
+      if (sub.length > 5) {
+        throw new Error('503 UNAVAILABLE');
+      }
+      return sub.map((n) => n * 2);
+    },
+  });
+
+  assert.deepEqual(splitLogs, ['20->10+10', '10->5+5', '10->5+5']);
+  assert.equal(result.length, 20);
+  assert.equal(result[0], 2);
+  assert.equal(result[19], 40);
 });

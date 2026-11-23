@@ -50,14 +50,14 @@ test('ModelRateLimiter enforces cooldown and daily exhaustion tracking', async (
   limiter.recordError('daily-model', '429 RequestsPerDay exceeded');
   assert.equal(limiter.isDailyExhausted('daily-model'), true);
 
-  // Escalating 503 high-demand cooldowns (6s -> 12s -> 20s) and reset on recordSuccess
+  // Escalating 503 high-demand cooldowns (5s -> 10s -> 15s) and reset on recordSuccess
   limiter.recordError('spike-model', '503 UNAVAILABLE high demand');
   const firstWait = limiter.getRemainingCooldownMs('spike-model');
-  assert.ok(firstWait > 4000 && firstWait <= 6000);
+  assert.ok(firstWait > 3500 && firstWait <= 5000);
 
   limiter.recordError('spike-model', '503 UNAVAILABLE high demand');
   const secondWait = limiter.getRemainingCooldownMs('spike-model');
-  assert.ok(secondWait > 10000 && secondWait <= 12000);
+  assert.ok(secondWait > 8000 && secondWait <= 10000);
 
   limiter.recordSuccess('spike-model');
   limiter.recordError('spike-model', '503 UNAVAILABLE high demand');
@@ -67,7 +67,7 @@ test('ModelRateLimiter enforces cooldown and daily exhaustion tracking', async (
   limiter2.recordSuccess('fresh-model');
   limiter2.recordError('fresh-model', '503 UNAVAILABLE');
   const resetWait = limiter2.getRemainingCooldownMs('fresh-model');
-  assert.ok(resetWait > 4000 && resetWait <= 6000);
+  assert.ok(resetWait > 3500 && resetWait <= 5000);
 
   const realDailyPayload =
     '{"error":{"code":429,"message":"You exceeded your current quota... Quota exceeded for metric: generate_content_free_tier_requests, limit: 20, model: gemini-4-hydrogen, description: Generate content requests per day limit exceeded on Free Tier. Please retry in 8h20m58.577536482s.","status":"RESOURCE_EXHAUSTED"}}';

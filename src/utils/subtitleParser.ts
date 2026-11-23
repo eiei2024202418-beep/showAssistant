@@ -820,7 +820,7 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     return 'Myanmar3';
   }
 
-  // Italics, Main - Italics, DefaultItalics, Font2_OutlineShadow, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6, s7 -> Myanmar2
+  // Italics, Main - Italics, DefaultItalics, Font2_OutlineShadow, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6, s7, Italics - Isekai -> Myanmar2
   if (
     lower === 'italics' ||
     lower === 'italic' ||
@@ -837,7 +837,10 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     lower === 'ed lyrics white - eng' ||
     lower === 'q2' ||
     lower === 'q6' ||
-    lower === 's7'
+    lower === 's7' ||
+    lower === 'italics - isekai' ||
+    lower === 'italic - isekai' ||
+    lower === 'italics isekai'
   ) {
     return 'Myanmar2';
   }

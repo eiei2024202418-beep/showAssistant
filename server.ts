@@ -7,7 +7,7 @@ import {
   executeWithSafetyStepDown,
   SafetyBlockError,
 } from './src/utils/safetyStepDown.js';
-import { executeBatchWithAutoSplit } from './src/utils/batchResilience.js';
+import { executeBatchWithAutoSplit, shouldFastSplitLargeBatch } from './src/utils/batchResilience.js';
 import {
   sanitizePreTranslatedMap,
   filterRemainingTranslatableEvents,
@@ -843,42 +843,42 @@ ${JSON.stringify(batch)}
 
 Return a JSON array of objects with "index" (number matching input) and "translated" (translated dialogue text):`;
 
-  // Attempt strategy: prioritize user's chosen model (gemini-3.8-flash with HIGH thinking by default)
-  // and only rotate to alternate models if the primary model hits quota/overload errors.
+  // Attempt strategy: try the user's chosen model first, then immediately rotate across
+  // alternate Gemini models and lighter thinking tiers to survive 503 demand spikes and timeouts.
   const attemptPlans: { model: string; thinking?: ThinkingLevel; timeoutMs: number }[] =
     preferredModel === 'gemini-3.1-flash-lite'
       ? [
-          { model: 'gemini-3.1-flash-lite', timeoutMs: 90000 },
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 105000 },
-          { model: 'gemini-3.1-flash-lite', timeoutMs: 90000 },
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 105000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 90000 },
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.LOW, timeoutMs: 90000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 60000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 65000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 65000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 55000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 55000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.LOW, timeoutMs: 55000 },
         ]
       : preferredModel === 'gemini-4-hydrogen'
       ? [
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 105000 },
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 105000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 90000 },
-          { model: 'gemini-3.1-flash-lite', timeoutMs: 90000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 90000 },
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.LOW, timeoutMs: 90000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.HIGH, timeoutMs: 70000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 75000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 60000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 60000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 65000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 55000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 55000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.LOW, timeoutMs: 55000 },
         ]
       : [
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.HIGH, timeoutMs: 120000 },
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 105000 },
-          { model: 'gemini-3.1-flash-lite', timeoutMs: 90000 },
-          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 105000 },
-          { model: 'gemini-3.1-flash-lite', timeoutMs: 90000 },
-          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.LOW, timeoutMs: 90000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.HIGH, timeoutMs: 75000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.HIGH, timeoutMs: 70000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 60000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.MEDIUM, timeoutMs: 65000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.MEDIUM, timeoutMs: 60000 },
+          { model: 'gemini-3.1-flash-lite', timeoutMs: 55000 },
+          { model: 'gemini-3.8-flash', thinking: ThinkingLevel.LOW, timeoutMs: 55000 },
+          { model: 'gemini-4-hydrogen', thinking: ThinkingLevel.LOW, timeoutMs: 55000 },
         ];
 
   let lastError: unknown;
+  const failedDistinctModels = new Set<string>();
   const totalAttempts = attemptPlans.length;
 
   for (let attempt = 1; attempt <= totalAttempts; attempt++) {
@@ -1060,9 +1060,19 @@ Return a JSON array of objects with "index" (number matching input) and "transla
       throw new Error('Received empty or invalid array from translation model');
     } catch (err) {
       lastError = err;
+      failedDistinctModels.add(modelToUse);
       const errMsg = err instanceof Error ? err.message : String(err);
       const classified = rateLimiter?.recordError(modelToUse, errMsg);
       console.warn(`[translate] Attempt ${attempt}/${totalAttempts} (${modelToUse}, thinking=${plan.thinking || 'default'}) failed: ${errMsg}`);
+
+      // Fast-split large batches (>= 10 lines) as soon as >= 2 distinct models fail due to 503/timeout/overload
+      if (shouldFastSplitLargeBatch(batch.length, failedDistinctModels.size, err, 5)) {
+        console.warn(
+          `[translate] Fast-splitting large batch (${batch.length} lines) after transient failure across ${failedDistinctModels.size} models`
+        );
+        throw err;
+      }
+
       if (attempt < totalAttempts) {
         const nextPlan = attemptPlans[attempt];
         const switchingHealthyModel =
@@ -1248,7 +1258,7 @@ async function runSubtitleTranslationPipeline(
     emit({
       type: 'status',
       batchIndex: 0,
-      totalBatches: Math.ceil(remainingEvents.length / 28),
+      totalBatches: Math.ceil(remainingEvents.length / 20),
       statusMessage: 'Analyzing episode speakers (gender & pronoun lock), places & ranks glossary...',
       percent: startPercent,
     });
@@ -1262,7 +1272,7 @@ async function runSubtitleTranslationPipeline(
         emit({
           type: 'status',
           batchIndex: 0,
-          totalBatches: Math.ceil(remainingEvents.length / 28),
+          totalBatches: Math.ceil(remainingEvents.length / 20),
           statusMessage: msg,
           percent: startPercent,
         });
@@ -1282,7 +1292,7 @@ async function runSubtitleTranslationPipeline(
 
   const episodeLockInstruction = formatEpisodeLockInstruction(episodeLock);
 
-  const BATCH_SIZE = 28;
+  const BATCH_SIZE = 20;
   const batches: BatchItemInput[][] = [];
   let cursor = 0;
   while (cursor < remainingEvents.length) {
@@ -1380,7 +1390,7 @@ async function runSubtitleTranslationPipeline(
 
       const translatedBatch = await executeBatchWithAutoSplit({
         batch: currentBatch,
-        minSplitSize: 8,
+        minSplitSize: 5,
         onSplit: (origLen, firstLen, secondLen) => {
           console.warn(`[translate] Auto-splitting timed-out/failed batch (${origLen} -> ${firstLen} + ${secondLen} lines)`);
           emit({

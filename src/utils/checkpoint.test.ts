@@ -12,6 +12,8 @@ import {
   clearCheckpoint,
   isCheckpointResumable,
   getCheckpointTranslatedCount,
+  classifyAutoResumeError,
+  getAutoResumeDelaySec,
   type StorageLike,
   type TranslationCheckpoint,
 } from './checkpoint';
@@ -206,4 +208,36 @@ test('saveCheckpoint retries after evicting older entries when storage quota is 
   assert.equal(saveCheckpoint(cp2, tightStorage), true);
   assert.equal(loadCheckpointBySignature(cp1.signature, tightStorage), null);
   assert.equal(loadCheckpointBySignature(cp2.signature, tightStorage)?.fileName, 'new.ass');
+});
+
+test('classifyAutoResumeError allows transient 503/timeout/SSE/429 RPM and blocks daily quota/auth/validation errors', () => {
+  assert.equal(
+    classifyAutoResumeError('{"error":{"code":503,"status":"UNAVAILABLE"}}').shouldAutoRetry,
+    true
+  );
+  assert.equal(
+    classifyAutoResumeError('Model gemini-3.8-flash timed out after 90s').shouldAutoRetry,
+    true
+  );
+  assert.equal(
+    classifyAutoResumeError('Connection dropped before translation finished.').shouldAutoRetry,
+    true
+  );
+  assert.equal(
+    classifyAutoResumeError('429 RESOURCE_EXHAUSTED retry in 15s').shouldAutoRetry,
+    true
+  );
+
+  assert.equal(
+    classifyAutoResumeError('429 GenerateRequestsPerDayPerProjectPerModel exceeded').shouldAutoRetry,
+    false
+  );
+  assert.equal(classifyAutoResumeError('API_KEY_INVALID').shouldAutoRetry, false);
+  assert.equal(classifyAutoResumeError('PERMISSION_DENIED').shouldAutoRetry, false);
+  assert.equal(classifyAutoResumeError('Server returned status 400: Bad Request').shouldAutoRetry, false);
+
+  assert.deepEqual(
+    [0, 1, 2, 3, 4, 5, 9].map((i) => getAutoResumeDelaySec(i)),
+    [6, 10, 15, 20, 25, 30, 30]
+  );
 });

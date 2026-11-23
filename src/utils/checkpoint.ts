@@ -285,3 +285,58 @@ export function clearCheckpoint(
     // ignore
   }
 }
+
+export interface AutoResumeClassification {
+  shouldAutoRetry: boolean;
+  reasonLabel: string;
+}
+
+/**
+ * Determines whether a client translation failure is transient (503 high demand, timeout,
+ * temporary 429 RPM limit, or SSE connection drop) and safe to auto-resume from checkpoint,
+ * vs fatal (daily quota exhausted, invalid API key, bad subtitle format).
+ */
+export function classifyAutoResumeError(errMsg: string): AutoResumeClassification {
+  const msg = (errMsg || '').trim();
+  if (!msg) {
+    return { shouldAutoRetry: false, reasonLabel: 'Unknown error' };
+  }
+
+  // Never auto-loop on hard quota / auth / validation errors
+  if (
+    /Free Tier Daily API Quota Exceeded|RequestsPerDay|PerDay|\bdaily\b|API_KEY_INVALID|PERMISSION_DENIED|Invalid ASS|Invalid SRT|No valid subtitles|Server returned status 400|Server returned status 401|Server returned status 403/i.test(
+      msg
+    )
+  ) {
+    return { shouldAutoRetry: false, reasonLabel: 'Fatal error' };
+  }
+
+  if (/503|UNAVAILABLE|high demand|overloaded/i.test(msg)) {
+    return { shouldAutoRetry: true, reasonLabel: 'Google AI high demand (503)' };
+  }
+
+  if (/timed out|timeout|ETIMEDOUT|504|502/i.test(msg)) {
+    return { shouldAutoRetry: true, reasonLabel: 'Model timeout' };
+  }
+
+  if (/Connection dropped|Failed to fetch|network|ECONNRESET|ReadableStream/i.test(msg)) {
+    return { shouldAutoRetry: true, reasonLabel: 'Connection interrupted' };
+  }
+
+  if (/429|RESOURCE_EXHAUSTED|rate[- ]?limit/i.test(msg)) {
+    return { shouldAutoRetry: true, reasonLabel: 'Temporary rate limit (429)' };
+  }
+
+  return { shouldAutoRetry: false, reasonLabel: 'Non-retryable error' };
+}
+
+/**
+ * Returns progressive wait seconds before auto-resuming after a transient error:
+ * 6s -> 10s -> 15s -> 20s -> 25s -> 30s
+ */
+export function getAutoResumeDelaySec(attemptZeroBased: number): number {
+  const schedule = [6, 10, 15, 20, 25, 30];
+  const idx = Math.max(0, Math.min(schedule.length - 1, Math.floor(attemptZeroBased)));
+  return schedule[idx];
+}
+
