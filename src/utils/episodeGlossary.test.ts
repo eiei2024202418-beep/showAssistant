@@ -139,11 +139,18 @@ test('detectSpeakerPronounViolation & applyDeterministicSpeakerPronounFix preven
   assert.ok(hint?.includes('MALE'));
   assert.ok(hint?.includes('ကျွန်တော်'));
   assert.ok(hint?.includes('FORBIDDEN: ကျွန်မ'));
+  assert.ok(hint?.includes('ငါ/မင်း/နင်'));
 
   const instruction = formatEpisodeLockInstruction(profile);
-  assert.ok(instruction.includes('Speaker-Gender Strict Pronoun Lock'));
-  assert.ok(instruction.includes('Dars (MALE): ONLY Self="ကျွန်တော်"'));
+  assert.ok(instruction.includes('Speaker-Gender & Character Vibe Lock'));
+  assert.ok(instruction.includes('Dars (MALE): Primary Self="ကျွန်တော်"'));
   assert.ok(instruction.includes('"Guillier Gorge" -> "Guillier ချောက်ကမ်းပါး"'));
+
+  // Male actor using casual "ငါ" in rough/peer scene when primary is "ကျွန်တော်" MUST be allowed (not forced polite!)
+  assert.equal(
+    detectSpeakerPronounViolation('Dars', 'ငါ ဒီကောင်ကို သတ်ပစ်မယ်', profile).valid,
+    true
+  );
 
   // Glossary post-process catches leftover English place/rank words inside Burmese text
   assert.equal(

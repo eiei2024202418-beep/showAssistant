@@ -192,9 +192,9 @@ async function extractEpisodeLockProfile(
 
   const modelChain =
     preferredModel === 'gemini-4-hydrogen'
-      ? ['gemini-4-hydrogen', 'gemini-3.1-flash-lite', 'gemini-3.8-flash']
+      ? ['gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.1-flash-lite']
       : preferredModel === 'gemini-3.8-flash'
-      ? ['gemini-3.1-flash-lite', 'gemini-3.8-flash']
+      ? ['gemini-3.8-flash', 'gemini-4-hydrogen', 'gemini-3.1-flash-lite']
       : ['gemini-3.1-flash-lite', 'gemini-3.8-flash'];
 
   const sourceHint =
@@ -207,16 +207,19 @@ async function extractEpisodeLockProfile(
   const systemInstruction = `You are a lead Burmese anime localization director preparing an Episode-Wide Consistency Sheet before subtitle translation begins.
 Inspect the episode filename, speaker list ("actors"), detected proper phrases ("detectedProperPhrases"), and sample dialogue/sign lines (${sourceHint}) and extract ALL 3 sections strictly:
 
-1. "speakerProfiles": MANDATORY Speaker-Gender Strict Pronoun Lock for EVERY recurring actor in "actors":
+1. "speakerProfiles": Speaker-Gender & Natural Anime Register Profile for EVERY recurring actor in "actors":
    - Specify exact "gender": "male" or "female" (only use "unknown" if genuinely impossible to tell).
-   - Specify ONE SINGLE "fixedSelfPronoun" (e.g., "ကျွန်တော်" OR "ကျွန်ုပ်" OR "ကိုယ်" OR "ငါ" for males; "ကျွန်မ" OR "ငါ" for females — NEVER list multiple options with "/"!).
-     * CRITICAL: A single character must NEVER switch between "ကျွန်ုပ်" and "ကျွန်တော်" across batches. Pick ONE and lock it!
-     * CRITICAL: Male characters NEVER use "ကျွန်မ" / "ကျွန်မတို့". Female characters NEVER use "ကျွန်တော်" / "ကျွန်တော်တို့" / "ခင်ဗျား".
-   - Specify exact matching "fixedPluralPronoun" (e.g. "ကျွန်တော်တို့", "ကျွန်ုပ်တို့", "ကျွန်မတို့", "ကိုယ်တို့", "ငါတို့").
+   - Pick ONE primary "fixedSelfPronoun" matching the character's TRUE anime personality — DO NOT default everyone to polite "ကျွန်တော်" / "ကျွန်မ"!
+     * Rough, aggressive, delinquent, villain, action hero, tsundere, teen buddy, or prideful character -> lock to "ငါ" (or "ကိုယ်" for chill/flirty male).
+     * Solemn knight, demon lord, ancient noble, samurai -> "ကျွန်ုပ်" or "ငါ".
+     * ONLY genuinely polite, timid, respectful, servant, or formal junior characters -> "ကျွန်တော်" (male) or "ကျွန်မ" (female).
+   - Also set a concise "toneNote" (e.g. "rough aggressive teen slang", "cocky casual buddy", "chill playful guy", "tsundere casual girl", "polite respectful maid").
+   - CRITICAL: Male characters NEVER use "ကျွန်မ" / "ကျွန်မတို့". Female characters NEVER use "ကျွန်တော်" / "ကျွန်တော်တို့" / "ခင်ဗျား". Formal characters must NOT mix "ကျွန်ုပ်" and "ကျွန်တော်".
+   - Specify exact matching "fixedPluralPronoun" (e.g. "ငါတို့", "ကိုယ်တို့", "ကျွန်တော်တို့", "ကျွန်ုပ်တို့", "ကျွန်မတို့").
 
-2. "pronounLocks": Consistent speaker -> listener Burmese pronoun pairs so pronouns NEVER drift between batches:
-   - Examples: "Dars" -> "Romelia": "ကျွန်တော် / ခင်ဗျား" or "ကျွန်ုပ် / အရှင်မ", "Romelia" -> "Dars": "ကျွန်မ / ရှင်".
-   - Infer gender, age, social rank, and closeness accurately from dialogue tone and honorifics (-san, -sama, -kun, -chan).
+2. "pronounLocks": Consistent speaker -> listener Burmese pronoun pairs matching TRUE anime relationship & vibe:
+   - Examples: Close friends/rivals/angry/rough -> "ငါ / မင်း" or "ငါ / နင်", flirt/chill -> "ကိုယ် / မင်း", respectful/subordinate -> "ကျွန်တော် / ခင်ဗျား" or "ကျွန်မ / ရှင်".
+   - Infer gender, age, closeness, aggression, and honorifics (-san, -sama, -kun, -chan, yobitsute, ore/temee/kisama) accurately so rough characters stay rough and modern teens sound natural!
 
 3. "glossaryTerms": STRICT 1-FORM Place/Country, Rank/Title, and Episode Title Lock:
    - RULE A (Places, Kingdoms, Geographic Landmarks — "place"): Keep the Proper Root Name in English/Romaji EXACTLY AS SPELLED and translate ONLY the geographic suffix into ONE locked Burmese word!
@@ -356,8 +359,8 @@ In Aegisub, Burmese combining vowel/tone marks (ေ, ာ, ါ, း, etc.) count 
 
 MANDATORY BALANCED NATURAL RULE (MUST OBEY):
 - ${BALANCED_COMPRESSION_PRESERVE_RULE}
-- Do NOT strip polite/respectful endings or character tone markers (e.g. "သခင်ကြီးရှင့်", "ပါတယ်", "ပါဘူး", "နော်", "လား", "ရှင့်").
-- Gently tighten ONLY redundant filler clauses or overly wordy phrasing so its Aegisub character count is <= "maxChars" (targeting ~12–14 CPS) while keeping complete natural grammar and character emotion.
+- Do NOT make casual/rough/angry lines sound overly polite, and keep original character slang, vibe, and sentence endings (e.g. "ကွ", "ဟေ့", "ဘူး", "တယ်", "လား", "နော်", "ရှင့်").
+- Gently tighten ONLY redundant filler clauses or overly wordy phrasing so its Aegisub character count is <= "maxChars" (targeting ~12–14 CPS) while keeping complete natural grammar, youth slang, and character emotion.
 - Output ONLY pure Burmese Unicode (\\u1000-\\u109F) plus ASCII character names when needed. NEVER output Ethiopic (ድ), Thai, Lao, Japanese, CJK, Korean, Hindi, Arabic, or Cyrillic characters.
 - Do NOT include ASS {\\...} tags (tags are preserved separately).
 - NEVER end with a period (.).`
@@ -572,7 +575,7 @@ Translate EACH line cleanly and accurately into natural spoken Burmese following
 1. NEVER copy or leave source Japanese/Kanji/Hanzi/Kana or ANY non-allowed Unicode scripts (CJK/Kanji \`無號機\`, Hiragana, Katakana, Ethiopic \`ድ\`, Arabic, Thai, Lao, Korean, Indic, Cyrillic) in "translated" — even if the source line has ASS tags like {\\i1}, quotation marks like "部長", or Kanji unit/mecha codenames (translate/romanize \`無号機\`/\`無號機\` as \`Unit 0\`, \`Mugouki\`, or \`နံပါတ်မဲ့ယူနစ်\` — NEVER output CJK/Kanji!).
 2. If "forbiddenTokens" is present on an item, you MUST replace every listed foreign token with natural Burmese or English/Romaji so ZERO forbidden characters remain!
 3. Output ONLY pure Myanmar Unicode (\\u1000-\\u109F) plus Basic Latin ASCII/digits & standard punctuation ONLY (use \`…\` for interrupted pauses instead of a single \`. \`; fix any \`{\\i0}{\\i1}\` into \`{\\i1}...{\\i0}\`; ALWAYS spell \`ကတိ\` instead of \`ဂတိ\`).
-4. OBEY "speakerLock" STRICTLY: Male actors NEVER use \`ကျွန်မ/ကျွန်မတို့\`; Female actors NEVER use \`ခင်ဗျား/ကျွန်တော်/ကျွန်တော်တို့\`; NEVER switch self-pronoun between \`ကျွန်ုပ်\` and \`ကျွန်တော်\`.
+4. OBEY "speakerLock" gender rules STRICTLY (Male actors NEVER use \`ကျွန်မ/ကျွန်မတို့\`; Female actors NEVER use \`ခင်ဗျား/ကျွန်တော်/ကျွန်တော်တို့\`; NEVER mix \`ကျွန်ုပ်\` and \`ကျွန်တော်\`). At the same time, DO NOT overuse \`ကျွန်တော်/ကျွန်မ\` — follow Priorities #1-#4 (punchy modern youth Burmese, use \`ငါ/မင်း/နင်/ကိုယ်\` or omit pronouns when casual, angry, or rough!).
 5. Translate ALL common English nouns & ranks into Burmese (General -> ဗိုလ်ချုပ်, Crown Prince -> အိမ်ရှေ့မင်းသား, His Majesty -> ဘုရင်မင်းမြတ်, Heaven -> ကောင်းကင်ဘုံ, Boss -> သူဌေး, Devil -> နတ်ဆိုး) and keep proper place roots in English + Burmese suffix (e.g. Guillier ချောက်ကမ်းပါး, Lionel နိုင်ငံတော်, Dacan လွင်ပြင်).
 6. Preserve all ASS tags {\\...} from "originalText". If "isDialogue" is true, output a SINGLE line without \\N line breaks; if "isDialogue" is false (Signs/RPG UI/Text/Title/Lyrics), translate ALL descriptive labels/stats/disclaimers into concise Burmese (only standard short game abbreviations like HP/MP/LV or proper names stay English) and preserve \\N line breaks intact. Never output timecodes or trailing periods (.).
 7. If "isDialogue" is true and "maxChars" is provided, keep Aegisub visible char count <= maxChars. If "maxChars" is omitted, translate naturally without artificial character shortening.
@@ -806,11 +809,11 @@ async function translateBatchWithRetry(
    - ဇာတ်ကောင်ပြောသော Spoken Dialogue (isDialogue: true) များတွင် \\N (line break) များ မထည့်ဘဲ တစ်ကြောင်းတည်း (single line) အဖြစ်သာ ပြန်ပေးပါ။`
       : cpsMode === 'balanced_natural'
       ? `၁။ ဇာတ်ကောင်ပြောသော Dialogue များ (isDialogue: true) [Balanced Natural — Target CPS ~12–14]:
-   - မြန်မာစကားပြော လေသံ၊ ဇာတ်ကောင်စရိုက်/ယဉ်ကျေးမှု (ဥပမာ: "သခင်ကြီးရှင့်", "ကိုယ်/မင်း", "ရှင်/ကျွန်မ", "ငါ/နင်") နှင့် ဝါကျအဆုံးသတ် (ဘူး/တယ်/လား/ရှင့်) များကို မပျက်စေဘဲ သဘာဝကျကျ ကျစ်လျစ်အောင် ပြန်ပေးပါ (Target ~12–14 CPS, "maxChars" ဝန်းကျင် ထိန်းပါ)။
-   - ⚠️ အတိုချုံးရန်အတွက် ဇာတ်ကောင်၏ ယဉ်ကျေးသော လေသံ/အဆုံးသတ် စကားလုံးများကို မဖြုတ်ပစ်ရ — ဝါကျအပြည့်အစုံ ဖတ်ရလွယ်ကူပြီး သဘာဝကျပါစေ။
+   - ဇာတ်ကောင်စရိုက်/ခံစားချက် (ကြမ်းတမ်း/ဒေါသ/ဟာသ/ခပ်မိုက်မိုက်/ယဉ်ကျေး) နှင့် ခေတ်မီလူငယ်စကားပြော လေသံ (TikTok/Facebook စကားပြော) ကို မပျက်စေဘဲ တိုတိုကျစ်ကျစ် သဘာဝကျကျ ပြန်ပေးပါ (Target ~12–14 CPS, "maxChars" ဝန်းကျင် ထိန်းပါ)။
+   - ⚠️ အတိုချုံးရန်အတွက် ဇာတ်ကောင်၏ ခံစားချက်၊ စိတ်ဆိုး/ရိုင်းစိုင်း/နောက်ပြောင် လေသံနှင့် သဘာဝအဆုံးသတ်များကို မပျက်စေရ — စာအုပ်စကား/လေးလံသော ယဉ်ကျေးစကားများအဖြစ် ပြောင်းမပစ်ရ။
    - ဇာတ်ကောင်ပြောသော Spoken Dialogue (isDialogue: true) များတွင် \\N (line break) များ မထည့်ဘဲ တစ်ကြောင်းတည်း (single line) အဖြစ်သာ ပြန်ပေးပါ။`
       : `၁။ ဇာတ်ကောင်ပြောသော Dialogue များ (isDialogue: true) [Natural Unlimited — No CPS Limit]:
-   - CPS / စာလုံးအရေအတွက် ကန့်သတ်ချက် လုံးဝ မရှိပါ။ မူရင်းအဓိပ္ပာယ်၊ ခံစားချက်နှင့် ဇာတ်ကောင်စရိုက်အတိုင်း အသဘာဝအကျဆုံး၊ အပြည့်စုံဆုံး စကားပြောမြန်မာလို ပြန်ပေးပါ။
+   - CPS / စာလုံးအရေအတွက် ကန့်သတ်ချက် လုံးဝ မရှိပါ။ မူရင်းအဓိပ္ပာယ်၊ ခံစားချက်နှင့် ဇာတ်ကောင်စရိုက်အတိုင်း ခေတ်မီပြီး အသဘာဝအကျဆုံး စကားပြောမြန်မာလို ပြန်ပေးပါ။
    - ဇာတ်ကောင်ပြောသော Spoken Dialogue (isDialogue: true) များတွင် \\N (line break) များ မထည့်ဘဲ တစ်ကြောင်းတည်း (single line) အဖြစ်သာ ပြန်ပေးပါ။`;
 
   const prompt = `# Source Language: ${sourceHint}
@@ -833,8 +836,10 @@ ${dialogueCpsRule}
    - ဇာတ်ကောင်နာမည် (Character Name) / နေရာနာမည်ရင်း သို့မဟုတ် HP/MP/LV ကဲ့သို့ Game stat tag များမှလွဲ၍ Heaven, Boss, Devil, Master, Princess, Monster, Guild, Wedding, Promise စသည့် သာမန်အင်္ဂလိပ် စကားလုံးများကို အင်္ဂလိပ်လို မချန်ဘဲ မြန်မာလို အပြည့်အစုံ (ဥပမာ - ကောင်းကင်ဘုံ, သူဌေး/ခေါင်းဆောင်, နတ်ဆိုး/မိစ္ဆာ) ဘာသာပြန်ပေးရမည်။
    - မြန်မာစာထဲတွင် အီသီယိုးပီးယား (ဥပမာ ድ), ထိုင်း (ค), လာအို (ະ), အာရပ်, ကိုရီးယား, ဟိန္ဒီ, ရုရှား, သို့မဟုတ် ဂျပန်/တရုတ် Kanji/Hanzi/Kana စာလုံးများ (ဥပမာ \`無號機\`, \`無号機\`) လုံးဝ မရောထည့်ရ။ Kanji ဖြင့် ရေးထားသော Unit/Mecha/ကုဒ်နာမည်များကို "Unit 0", "Mugouki" သို့မဟုတ် "နံပါတ်မဲ့ယူနစ်" ဟု အင်္ဂလိပ်/မြန်မာလို ပြောင်းရေးပါ။ Allowed scripts (မြန်မာ Unicode \\u1000-\\u109F + Basic Latin ASCII + digits + standard punctuation) ကိုသာ ထုတ်ပေးရမည်။
    - စာလုံးပေါင်း မှန်ကန်စေရန် "ကတိ" ကို "ဂတိ" ဟု မှားမရေးရ (တကယ် ကို တစ်ကယ် ဟု မရေးရ)။
-၇။ SPEAKER-GENDER STRICT PRONOUN LOCK & PLACE/RANK CONSISTENCY:
-   - Line တစ်ခုချင်းစီရှိ "actor" နှင့် "speakerLock" ကို အတိအကျ စစ်ဆေးပါ — ယောက်ျားလေး Actor (MALE) သည် "ကျွန်မ / ကျွန်မတို့" လုံးဝ မသုံးရ၊ မိန်းကလေး Actor (FEMALE) သည် "ခင်ဗျား / ကျွန်တော် / ကျွန်တော်တို့" လုံးဝ မသုံးရ။ Character တစ်ဦးတည်းတွင် "ကျွန်ုပ်" နှင့် "ကျွန်တော်" ရောမသုံးဘဲ Lock ချထားသော Self-Pronoun တစ်မျိုးတည်းသာ သုံးပါ။
+၇။ NATURAL YOUTH ANIME VIBE & SPEAKER-GENDER LOCK (NO POLITE PRONOUN SPAM!):
+   - ⚠️ အရေးကြီးဆုံး: System Prompt ထဲက Priority #1-#4 (တိုရှင်းလိုရင်း၊ ခေတ်မီလူငယ် TikTok/Facebook စကားပြော၊ ဇာတ်ကောင်စရိုက်နဲ့ ခံစားချက်၊ Adult Channel မို့ ရိုင်းစိုင်း/ကြမ်းတမ်း/ဒေါသ/နောက်ပြောင်ခန်းမှာ လွတ်လွတ်လပ်လပ် ပြောနိုင်ခြင်း) ကို ၁၀၀% လိုက်နာပါ!
+   - 🚫 "ကျွန်တော် / ကျွန်မ" ကို ဝါကျတိုင်းမှာ အမြဲ ထည့်မသုံးရ! သူငယ်ချင်းချင်း၊ ရန်သူချင်း၊ ဒေါသထွက်/ရိုင်းစိုင်း/ခပ်ကြမ်းကြမ်း အခန်းတွေနဲ့ လူငယ်အချင်းချင်း စကားပြောခန်းတွေမှာ "ငါ / မင်း / နင် / ကိုယ် / ဟေ့ကောင်" သို့မဟုတ် နာမ်စား လုံးဝ ဖြုတ်ပြီး ("ဘာလုပ်နေတာလဲ", "မဖြစ်နိုင်ဘူး", "စောက်ရူးလား") ထိထိမိမိ ပြန်ပါ။ "ကျွန်တော် / ကျွန်မ" ကို သခင်/ဆရာ/ဘုရင်/သူစိမ်းကို တကယ် ယဉ်ကျေးရိုသေစွာ ပြောတဲ့နေရာမှာသာ သုံးပါ။
+   - Line တစ်ခုချင်းစီရှိ "actor" နှင့် "speakerLock" ၏ Gender စည်းမျဉ်းကို စစ်ဆေးပါ — ယောက်ျားလေး Actor (MALE) သည် "ကျွန်မ / ကျွန်မတို့ / ရှင့်" လုံးဝ မသုံးရ၊ မိန်းကလေး Actor (FEMALE) သည် "ခင်ဗျား / ကျွန်တော် / ကျွန်တော်တို့" လုံးဝ မသုံးရ။ Formal နေရာမှာ "ကျွန်ုပ်" နှင့် "ကျွန်တော်" မရောရ။
    - နေရာ/နိုင်ငံနာမည် အရင်းကို Romaji/English အတိုင်း ထားပြီး နောက်ဆက်တွဲကိုသာ မြန်မာလို တစ်မျိုးတည်း ပြန်ပါ (ဥပမာ- Guillier ချောက်ကမ်းပါး, Lionel နိုင်ငံတော်, Dacan လွင်ပြင် — ဂီလီယာ ဟု အသံဖလှယ်ခြင်း သို့မဟုတ် Guillier Gorge ဟု အင်္ဂလိပ်ချန်ခြင်း မလုပ်ရ)။
    - ရာထူးနာမည်များ (General -> ဗိုလ်ချုပ်, Crown Prince -> အိမ်ရှေ့မင်းသား, His Majesty -> ဘုရင်မင်းမြတ်) ကို အင်္ဂလိပ်/မြန်မာ မရောဘဲ မြန်မာလို တစ်ညီတည်း ပြန်ပေးပါ။
 

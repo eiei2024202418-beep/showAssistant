@@ -75,7 +75,7 @@ export const CPS_MODE_CONFIGS: Record<DialogueCpsMode, CpsModeConfig> = {
 };
 
 export const BALANCED_COMPRESSION_PRESERVE_RULE =
-  'မူရင်း ဇာတ်ကောင်နာမ်စား (ကိုယ်/မင်း, ရှင်/ကျွန်မ, ငါ/နင်) နဲ့ ဝါကျအဆုံးသတ် (ဘူး/တယ်/လား/ရှင့်) တွေကို လုံးဝမပြောင်းလဲရ၊ သဒ္ဒါမပြတ်စေဘဲ မလိုအပ်တဲ့ စကားပိုတွေကိုပဲ ကျစ်လျစ်အောင် ချုံ့ရမည်။';
+  'မူရင်း ဇာတ်ကောင်စရိုက်နဲ့ နာမ်စား (ငါ/နင်, ငါ/မင်း, ကိုယ်/မင်း, ကျွန်တော်/ကျွန်မ/ရှင်) နဲ့ ဝါကျအဆုံးသတ်/ခံစားချက် (ကွ/ဟေ့/ဘူး/တယ်/လား/ရှင့်) တွေကို မပြောင်းလဲဘဲ ခေတ်မီလူငယ်စကားပြောအတိုင်း မလိုအပ်တဲ့ စကားပိုတွေကိုပဲ ကျစ်လျစ်အောင် ချုံ့ရမည်။';
 
 export function normalizeCpsMode(raw: unknown): DialogueCpsMode {
   if (raw === 'strict_compact' || raw === 'balanced_natural' || raw === 'natural_unlimited') {

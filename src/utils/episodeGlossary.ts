@@ -359,7 +359,8 @@ export function formatLineSpeakerHint(
         : 'ကျွန်တော်, ကျွန်တော်တို့, ခင်ဗျား, ခင်ဗျာ'
       : '';
 
-  return `${genderLabel} | Self: ${sp.fixedSelfPronoun} / ${sp.fixedPluralPronoun}${
+  const toneLabel = sp.toneNote ? ` | Vibe: ${sp.toneNote}` : '';
+  return `${genderLabel}${toneLabel} | Style Self: ${sp.fixedSelfPronoun} (drop self-pronoun or use ငါ/မင်း/နင် freely in rough/angry/peer talk)${
     forbiddenList ? ` | FORBIDDEN: ${forbiddenList}` : ''
   }`;
 }
@@ -590,9 +591,9 @@ export function formatEpisodeLockInstruction(profile: EpisodeLockProfile | null 
   ];
 
   if (hasSpeakers && profile.speakerProfiles) {
-    sections.push('\n1. Speaker-Gender Strict Pronoun Lock (Actor -> Gender | Fixed Self / Plural | FORBIDDEN):');
+    sections.push('\n1. Speaker-Gender & Character Vibe Lock (Actor -> Gender | Style Self / Plural | FORBIDDEN):');
     sections.push(
-      '⚠️ ယောက်ျားလေး Actor သည် "ကျွန်မ / ကျွန်မတို့ / ရှင့်" ကို လုံးဝ မသုံးရ။ မိန်းကလေး Actor သည် "ခင်ဗျား / ကျွန်တော် / ကျွန်တော်တို့" ကို လုံးဝ မသုံးရ။ Actor တစ်ဦးအတွက် သတ်မှတ်ထားသော Self-Pronoun (ဥပမာ- ကျွန်တော် OR ကျွန်ုပ် OR ကျွန်မ) တစ်မျိုးတည်းကိုသာ အစအဆုံး သုံးရမည်:'
+      '⚠️ ယောက်ျားလေး Actor သည် "ကျွန်မ / ကျွန်မတို့ / ရှင့်" ကို လုံးဝ မသုံးရ။ မိန်းကလေး Actor သည် "ခင်ဗျား / ကျွန်တော် / ကျွန်တော်တို့" ကို လုံးဝ မသုံးရ။ Formal/Polite အခန်းမှာ "ကျွန်ုပ်" နှင့် "ကျွန်တော်" ရောမသုံးရ။\n⚠️ အရေးကြီး: Style Self မှာ "ကျွန်တော်" သို့မဟုတ် "ကျွန်မ" ဖြစ်နေသော်လည်း စာကြောင်းတိုင်း၌ မထည့်ရ! သူငယ်ချင်း/ရန်သူ/ဒေါသ/ရိုင်းစိုင်း/ပေါ့ပါးတဲ့ ခေတ်မီလူငယ်စကားပြောခန်းတွေမှာ "ငါ / မင်း / နင် / ကိုယ်" သို့မဟုတ် နာမ်စားဖြုတ်ပြီး ဇာတ်ကောင်စရိုက်အတိုင်း သဘာဝကျကျ ပြန်ပါ:'
     );
     for (const sp of profile.speakerProfiles) {
       const genderTag = sp.gender.toUpperCase();
@@ -602,9 +603,9 @@ export function formatEpisodeLockInstruction(profile: EpisodeLockProfile | null 
           ? 'NEVER use ကျွန်မ/ကျွန်မတို့'
           : sp.gender === 'female'
           ? 'NEVER use ခင်ဗျား/ကျွန်တော်/ကျွန်တော်တို့'
-          : 'Keep fixed self-pronoun';
+          : 'Keep consistent self-pronoun register';
       sections.push(
-        `- ${sp.actor} (${genderTag}): ONLY Self="${sp.fixedSelfPronoun}", Plural="${sp.fixedPluralPronoun}" (${forbidden})${note}`
+        `- ${sp.actor} (${genderTag}): Primary Self="${sp.fixedSelfPronoun}", Plural="${sp.fixedPluralPronoun}" (${forbidden}; omit pronoun or switch to ငါ/မင်း/နင် when rough/angry/casual)${note}`
       );
     }
   }
