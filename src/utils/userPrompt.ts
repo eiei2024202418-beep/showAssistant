@@ -47,10 +47,11 @@ Jp စာတန်းထိုးတွေအတွက်သီးသန့် -
 1. Style Mapping - Style နာမည်တွေကို ဒီအတိုင်း ပြောင်းပေးပါ:
 Default, BD DX, Main, Q0, Font1_OutlineShadow -> Myanmar1
 Top, On Top, Bubble Song, Q7, Q1 , Main - Top  -> TopMyanmr
-overlap, italicstop, Top Italics, Italics Top, overlap, italics flashbacktop -> TopMyanmar2
+overlap, italicstop, Top Italics, Italics Top, Italics - Top, italics flashbacktop -> TopMyanmar2
 Italics, Main - Italics, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6, s7, Italics - Isekai -> Myanmar2
 Flashback -> Myanmar3
-Flashback Italics -> Myanmar31
+Flashback Top -> TopMyanmar3
+Flashback Italics, FlashbackItalics -> Myanmar31
 Sign_*, Signs, Q9, Q8, Q3, Q4, Q5, Layer1_Font1 -> Sign_Basic
 Narrator -> Narration
 

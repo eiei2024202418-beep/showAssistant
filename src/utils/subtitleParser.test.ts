@@ -164,6 +164,8 @@ test('mapStyleName correctly applies user style mapping rules', () => {
   assert.equal(mapStyleName('overlap'), 'TopMyanmar2');
   assert.equal(mapStyleName('italicstop'), 'TopMyanmar2');
   assert.equal(mapStyleName('Top Italics'), 'TopMyanmar2');
+  assert.equal(mapStyleName('Italics - Top'), 'TopMyanmar2');
+  assert.equal(mapStyleName('Top - Italics'), 'TopMyanmar2');
   assert.equal(mapStyleName('Narrator'), 'Narration');
 
   assert.equal(mapStyleName('Italics'), 'Myanmar2');
@@ -184,8 +186,13 @@ test('mapStyleName correctly applies user style mapping rules', () => {
   assert.equal(mapStyleName('Flashback'), 'Myanmar3');
   assert.equal(mapStyleName('Main - Flashback'), 'Myanmar3');
   assert.equal(mapStyleName('main - flashback'), 'Myanmar3');
+  assert.equal(mapStyleName('Flashback Top'), 'TopMyanmar3');
+  assert.equal(mapStyleName('FlashbackTop'), 'TopMyanmar3');
+  assert.equal(mapStyleName('Main - Flashback Top'), 'TopMyanmar3');
   assert.equal(mapStyleName('Flashback Italics'), 'Myanmar31');
+  assert.equal(mapStyleName('FlashbackItalics'), 'Myanmar31');
   assert.equal(mapStyleName('Main - Flashback Italics'), 'Myanmar31');
+  assert.equal(mapStyleName('italics flashbacktop'), 'TopMyanmar2');
 
   assert.equal(mapStyleName('Sign_Title'), 'Sign_Basic');
   assert.equal(mapStyleName('Signs'), 'Sign_Basic');

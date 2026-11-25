@@ -764,7 +764,8 @@ export function hasSignOrTextActor(actor?: string): boolean {
  * - overlap, italicstop, Top Italics -> TopMyanmar2
  * - Italics, Main - Italics, DefaultItalics, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6, s7 -> Myanmar2
  * - Flashback -> Myanmar3
- * - Flashback Italics -> Myanmar31
+ * - Flashback Top -> TopMyanmar3
+ * - Flashback Italics, FlashbackItalics -> Myanmar31
  * - Sign_*, Signs, Layer1_Font1, Q9, Q8, Q3, Q4, Q5 -> Sign_Basic
  * - Narrator -> Narration
  */
@@ -793,15 +794,33 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     return 'Sign_Basic';
   }
 
-  // Flashback Italics -> Myanmar31
+  // Flashback Top -> TopMyanmar3
+  if (
+    lower === 'flashback top' ||
+    lower === 'flashback - top' ||
+    lower === 'flashback_top' ||
+    lower === 'flashbacktop' ||
+    lower === 'main - flashback top' ||
+    lower === 'default - flashback top' ||
+    lower === 'top - flashback' ||
+    lower === 'top flashback'
+  ) {
+    return 'TopMyanmar3';
+  }
+
+  // Flashback Italics, FlashbackItalics -> Myanmar31
   if (
     lower === 'flashback italics' ||
     lower === 'flashback italic' ||
+    lower === 'flashbackitalics' ||
+    lower === 'flashbackitalic' ||
     lower === 'flashback_italics' ||
     lower === 'main - flashback italics' ||
     lower === 'main - flashback italic' ||
+    lower === 'main - flashbackitalics' ||
     lower === 'main flashback italics' ||
-    lower === 'default - flashback italics'
+    lower === 'default - flashback italics' ||
+    lower === 'default - flashbackitalics'
   ) {
     return 'Myanmar31';
   }
@@ -850,17 +869,21 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     return 'Narration';
   }
 
-  // overlap, italicstop, Top Italics, Italics Top, italics flashbacktop -> TopMyanmar2
+  // overlap, italicstop, Top Italics, Italics Top, Italics - Top, italics flashbacktop -> TopMyanmar2
   if (
     lower === 'overlap' ||
     lower === 'italicstop' ||
     lower === 'top italics' ||
     lower === 'top italic' ||
+    lower === 'top - italics' ||
+    lower === 'top - italic' ||
     lower === 'top_italics' ||
     lower === 'italics top' ||
     lower === 'italic top' ||
-    lower === 'italics flashbacktop' ||
-    lower === 'flashbacktop'
+    lower === 'italics - top' ||
+    lower === 'italic - top' ||
+    lower === 'italics_top' ||
+    lower === 'italics flashbacktop'
   ) {
     return 'TopMyanmar2';
   }
