@@ -157,6 +157,8 @@ test('mapStyleName correctly applies user style mapping rules', () => {
   assert.equal(mapStyleName('On Top'), 'TopMyanmr');
   assert.equal(mapStyleName('Default - Top'), 'TopMyanmr');
   assert.equal(mapStyleName('DefaultTop'), 'TopMyanmr');
+  assert.equal(mapStyleName('overlaptop'), 'TopMyanmr');
+  assert.equal(mapStyleName('Overlap Top'), 'TopMyanmr');
   assert.equal(mapStyleName('Bubble Song'), 'TopMyanmr');
   assert.equal(mapStyleName('Q7'), 'TopMyanmr');
   assert.equal(mapStyleName('Q1'), 'TopMyanmr');

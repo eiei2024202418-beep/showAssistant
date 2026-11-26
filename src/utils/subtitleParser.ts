@@ -888,7 +888,7 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     return 'TopMyanmar2';
   }
 
-  // Top, On Top, Default - Top, DefaultTop, Main - Top, Bubble Song, Q7, Q1 -> TopMyanmr
+  // Top, On Top, Default - Top, DefaultTop, Main - Top, overlaptop, Bubble Song, Q7, Q1 -> TopMyanmr
   if (
     lower === 'top' ||
     lower === 'on top' ||
@@ -898,6 +898,10 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     lower === 'default_top' ||
     lower === 'main - top' ||
     lower === 'main top' ||
+    lower === 'overlaptop' ||
+    lower === 'overlap top' ||
+    lower === 'overlap - top' ||
+    lower === 'overlap_top' ||
     lower === 'bubble song' ||
     lower === 'q7' ||
     lower === 'q1' ||
