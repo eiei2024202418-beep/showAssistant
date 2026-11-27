@@ -869,7 +869,7 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     return 'Narration';
   }
 
-  // overlap, italicstop, Top Italics, Italics Top, Italics - Top, italics flashbacktop -> TopMyanmar2
+  // overlap, italicstop, Top Italics, Italics Top, Italics - Top, DefaultItalicsTop, italics flashbacktop -> TopMyanmar2
   if (
     lower === 'overlap' ||
     lower === 'italicstop' ||
@@ -883,12 +883,17 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     lower === 'italics - top' ||
     lower === 'italic - top' ||
     lower === 'italics_top' ||
+    lower === 'defaultitalicstop' ||
+    lower === 'defaultitalictop' ||
+    lower === 'default italics top' ||
+    lower === 'default - italics top' ||
+    lower === 'default_italics_top' ||
     lower === 'italics flashbacktop'
   ) {
     return 'TopMyanmar2';
   }
 
-  // Top, On Top, Default - Top, DefaultTop, Main - Top, overlaptop, Bubble Song, Q7, Q1 -> TopMyanmr
+  // Top, On Top, Default - Top, DefaultTop, Main - Top, overlaptop, DefaultOverlap, Bubble Song, Q7, Q1 -> TopMyanmr
   if (
     lower === 'top' ||
     lower === 'on top' ||
@@ -902,6 +907,10 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     lower === 'overlap top' ||
     lower === 'overlap - top' ||
     lower === 'overlap_top' ||
+    lower === 'defaultoverlap' ||
+    lower === 'default overlap' ||
+    lower === 'default - overlap' ||
+    lower === 'default_overlap' ||
     lower === 'bubble song' ||
     lower === 'q7' ||
     lower === 'q1' ||
@@ -910,13 +919,17 @@ export function mapStyleName(originalStyle: string, actor?: string): string {
     return 'TopMyanmr';
   }
 
-  // Default, BD DX, Main, Q0, Font1_OutlineShadow -> Myanmar1
+  // Default, BD DX, Main, Q0, Font1_OutlineShadow, BottomCenter -> Myanmar1
   if (
     lower === 'default' ||
     lower === 'bd dx' ||
     lower === 'main' ||
     lower === 'q0' ||
-    lower === 'font1_outlineshadow'
+    lower === 'font1_outlineshadow' ||
+    lower === 'bottomcenter' ||
+    lower === 'bottom center' ||
+    lower === 'bottom - center' ||
+    lower === 'bottom_center'
   ) {
     return 'Myanmar1';
   }

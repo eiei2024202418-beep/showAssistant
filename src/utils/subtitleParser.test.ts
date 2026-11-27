@@ -152,6 +152,7 @@ test('mapStyleName correctly applies user style mapping rules', () => {
   assert.equal(mapStyleName('Main'), 'Myanmar1');
   assert.equal(mapStyleName('Q0'), 'Myanmar1');
   assert.equal(mapStyleName('Font1_OutlineShadow'), 'Myanmar1');
+  assert.equal(mapStyleName('BottomCenter'), 'Myanmar1');
 
   assert.equal(mapStyleName('Top'), 'TopMyanmr');
   assert.equal(mapStyleName('On Top'), 'TopMyanmr');
@@ -159,6 +160,7 @@ test('mapStyleName correctly applies user style mapping rules', () => {
   assert.equal(mapStyleName('DefaultTop'), 'TopMyanmr');
   assert.equal(mapStyleName('overlaptop'), 'TopMyanmr');
   assert.equal(mapStyleName('Overlap Top'), 'TopMyanmr');
+  assert.equal(mapStyleName('DefaultOverlap'), 'TopMyanmr');
   assert.equal(mapStyleName('Bubble Song'), 'TopMyanmr');
   assert.equal(mapStyleName('Q7'), 'TopMyanmr');
   assert.equal(mapStyleName('Q1'), 'TopMyanmr');
@@ -168,6 +170,7 @@ test('mapStyleName correctly applies user style mapping rules', () => {
   assert.equal(mapStyleName('Top Italics'), 'TopMyanmar2');
   assert.equal(mapStyleName('Italics - Top'), 'TopMyanmar2');
   assert.equal(mapStyleName('Top - Italics'), 'TopMyanmar2');
+  assert.equal(mapStyleName('DefaultItalicsTop'), 'TopMyanmar2');
   assert.equal(mapStyleName('Narrator'), 'Narration');
 
   assert.equal(mapStyleName('Italics'), 'Myanmar2');

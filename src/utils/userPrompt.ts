@@ -45,9 +45,9 @@ Jp စာတန်းထိုးတွေအတွက်သီးသန့် -
 # TECHNICAL REQUIREMENTS - နည်းပညာပိုင်း
 
 1. Style Mapping - Style နာမည်တွေကို ဒီအတိုင်း ပြောင်းပေးပါ:
-Default, BD DX, Main, Q0, Font1_OutlineShadow -> Myanmar1
-Top, On Top, Bubble Song, Q7, Q1, Main - Top, overlaptop -> TopMyanmr
-overlap, italicstop, Top Italics, Italics Top, Italics - Top, italics flashbacktop -> TopMyanmar2
+Default, BD DX, Main, Q0, Font1_OutlineShadow, BottomCenter -> Myanmar1
+Top, On Top, Bubble Song, Q7, Q1, Main - Top, overlaptop, DefaultOverlap -> TopMyanmr
+overlap, italicstop, Top Italics, Italics Top, Italics - Top, DefaultItalicsTop, italics flashbacktop -> TopMyanmar2
 Italics, Main - Italics, ED Lyrics White, ED Lyrics White - Eng, Q2, Q6, s7, Italics - Isekai -> Myanmar2
 Flashback -> Myanmar3
 Flashback Top -> TopMyanmar3
